@@ -1,0 +1,208 @@
+<?php
+/**
+ * WhatsToot Bot - Dashboard
+ */
+$pageTitle = 'WhatsToot — لوحة التحكم';
+?>
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?= $pageTitle ?></title>
+    <meta name="description" content="لوحة تحكم بوت واتساب لتنظيم صور أوامر العمل على Google Drive">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header" id="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1>WhatsToot</h1>
+                    <p class="subtitle">بوت تنظيم صور أوامر العمل</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <a href="../test-synology.php" class="btn btn-sm" style="background: rgba(42, 204, 125, 0.15); color: #2acc7d; border: 1px solid rgba(42, 204, 125, 0.3); text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold; margin-left: 10px;" target="_blank">🔍 فحص الاتصال</a>
+                <div class="bot-status" id="botStatusBadge">
+                    <span class="status-dot offline"></span>
+                    <span class="status-text">غير متصل</span>
+                </div>
+                <button class="btn btn-ghost" onclick="refreshData()" title="تحديث">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+
+        <!-- Stats Cards -->
+        <section class="stats-grid" id="statsGrid">
+            <div class="stat-card" id="cardTodayUploads">
+                <div class="stat-icon green">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-value" id="todayUploads">0</span>
+                    <span class="stat-label">رفعات اليوم</span>
+                </div>
+            </div>
+
+            <div class="stat-card" id="cardTotalUploads">
+                <div class="stat-icon blue">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                        <line x1="7" y1="2" x2="7" y2="22"></line>
+                        <line x1="17" y1="2" x2="17" y2="22"></line>
+                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                    </svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-value" id="totalUploads">0</span>
+                    <span class="stat-label">إجمالي الرفعات</span>
+                </div>
+            </div>
+
+            <div class="stat-card" id="cardWorkOrders">
+                <div class="stat-icon purple">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-value" id="uniqueWO">0</span>
+                    <span class="stat-label">أوامر عمل</span>
+                </div>
+            </div>
+
+            <div class="stat-card" id="cardPending">
+                <div class="stat-icon orange">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-value" id="pendingCount">0</span>
+                    <span class="stat-label">في الانتظار</span>
+                </div>
+            </div>
+
+            <div class="stat-card" id="cardUnsorted">
+                <div class="stat-icon yellow">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-value" id="unsortedCount">0</span>
+                    <span class="stat-label">غير مصنّف</span>
+                </div>
+            </div>
+
+            <div class="stat-card" id="cardDuplicates">
+                <div class="stat-icon red">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="6" width="16" height="16" rx="2"></rect>
+                        <path d="M6 2h16v16"></path>
+                    </svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-value" id="duplicateCount">0</span>
+                    <span class="stat-label">مكرر (تم تخطيه)</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Search & Filter -->
+        <section class="search-section">
+            <div class="search-box">
+                <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="searchInput" placeholder="بحث برقم أمر العمل..." autocomplete="off">
+            </div>
+            <div class="filter-tabs">
+                <button class="tab active" data-filter="all">الكل</button>
+                <button class="tab" data-filter="completed">مكتمل</button>
+                <button class="tab" data-filter="pending">معلّق</button>
+                <button class="tab" data-filter="duplicate">مكرر</button>
+                <button class="tab" data-filter="failed">فشل</button>
+            </div>
+        </section>
+
+        <!-- Uploads Table -->
+        <section class="table-section">
+            <div class="table-header">
+                <h2>آخر العمليات</h2>
+                <span class="table-count" id="tableCount">0 نتيجة</span>
+            </div>
+            <div class="table-wrapper">
+                <table id="uploadsTable">
+                    <thead>
+                        <tr>
+                            <th>أمر العمل</th>
+                            <th>اسم الملف</th>
+                            <th>المجموعة</th>
+                            <th>المرسل</th>
+                            <th>الحالة</th>
+                            <th>الوقت</th>
+                            <th>رابط</th>
+                        </tr>
+                    </thead>
+                    <tbody id="uploadsBody">
+                        <tr class="empty-row">
+                            <td colspan="7">
+                                <div class="empty-state">
+                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                                        <polyline points="13 2 13 9 20 9"></polyline>
+                                    </svg>
+                                    <p>لا توجد عمليات بعد</p>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Logs Section -->
+        <section class="logs-section">
+            <div class="logs-header">
+                <h2>سجل الأحداث</h2>
+                <button class="btn btn-sm btn-ghost" onclick="loadLogs()">تحديث</button>
+            </div>
+            <pre class="logs-content" id="logsContent">جاري التحميل...</pre>
+        </section>
+
+    </main>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Dependencies
+/vendor/
+/node-bot/node_modules/
+/node-bot/.wwebjs_auth/
+/node-bot/.wwebjs_cache/
+
+# Environment & Credentials
+.env
+credentials/
+
+# Database
+database/*.sqlite
+
+# Storage
+storage/temp/*
+storage/logs/*
+!storage/temp/.gitkeep
+!storage/logs/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

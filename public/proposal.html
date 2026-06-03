@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>مقترح — نظام تنظيم صور أوامر العمل</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        @page {
+            size: A4;
+            margin: 0;
+        }
+
+        body {
+            font-family: 'Tajawal', 'Segoe UI', sans-serif;
+            background: #f0f2f5;
+            color: #1a1a2e;
+            line-height: 1.7;
+            font-size: 14px;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        .page {
+            width: 210mm;
+            min-height: 297mm;
+            margin: 0 auto;
+            background: white;
+            padding: 0;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+        }
+
+        @media print {
+            body { background: white; }
+            .page { box-shadow: none; margin: 0; width: 100%; }
+            .no-print { display: none !important; }
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a1f35 50%, #111827 100%);
+            color: white;
+            padding: 36px 48px 28px;
+            position: relative;
+            overflow: hidden;
+        }
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -30%;
+            width: 60%;
+            height: 200%;
+            background: radial-gradient(ellipse, rgba(37, 211, 102, 0.08) 0%, transparent 70%);
+        }
+        .header::after {
+            content: '';
+            position: absolute;
+            bottom: -50%;
+            right: -20%;
+            width: 50%;
+            height: 200%;
+            background: radial-gradient(ellipse, rgba(66, 133, 244, 0.06) 0%, transparent 70%);
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 800;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 4px;
+        }
+        .header h1 span {
+            background: linear-gradient(135deg, #25D366, #4AE88C);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .header-sub {
+            font-size: 13px;
+            color: rgba(255,255,255,0.6);
+            position: relative;
+            z-index: 1;
+        }
+        .header-badge {
+            position: absolute;
+            top: 36px;
+            left: 48px;
+            background: rgba(37, 211, 102, 0.15);
+            color: #25D366;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            z-index: 1;
+            border: 1px solid rgba(37, 211, 102, 0.3);
+        }
+
+        /* Content */
+        .content {
+            padding: 32px 48px 40px;
+        }
+
+        /* Section */
+        .section {
+            margin-bottom: 28px;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 800;
+            color: #0a0e1a;
+            margin-bottom: 12px;
+            padding-bottom: 6px;
+            border-bottom: 2px solid #25D366;
+            display: inline-block;
+        }
+
+        /* Problem */
+        .problem-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .problem-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 10px 14px;
+            background: #fef2f2;
+            border-radius: 8px;
+            border-right: 3px solid #ef4444;
+            font-size: 13px;
+        }
+        .problem-item .icon { font-size: 16px; flex-shrink: 0; }
+        .problem-item strong { color: #dc2626; }
+
+        /* Solution */
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            margin: 16px 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+            border-radius: 12px;
+            border: 1px solid #d1fae5;
+        }
+        .flow-step {
+            text-align: center;
+            padding: 12px 16px;
+            min-width: 140px;
+        }
+        .flow-step .emoji { font-size: 28px; display: block; margin-bottom: 6px; }
+        .flow-step .label { font-size: 12px; font-weight: 700; color: #065f46; }
+        .flow-step .desc { font-size: 11px; color: #6b7280; margin-top: 2px; }
+        .flow-arrow {
+            font-size: 20px;
+            color: #25D366;
+            font-weight: bold;
+            margin: 0 4px;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12.5px;
+            padding: 6px 0;
+        }
+        .feature-check {
+            width: 20px;
+            height: 20px;
+            background: #d1fae5;
+            color: #059669;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        /* Cost Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        table th {
+            background: #f9fafb;
+            padding: 10px 14px;
+            text-align: right;
+            font-weight: 700;
+            font-size: 12px;
+            color: #6b7280;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        table tr:last-child td {
+            border-bottom: none;
+        }
+        .highlight-row td {
+            background: #f0fdf4;
+            font-weight: 700;
+        }
+        .cost-value {
+            color: #059669;
+            font-weight: 800;
+            font-size: 15px;
+        }
+        .cost-note {
+            font-size: 11px;
+            color: #9ca3af;
+        }
+
+        /* ROI Box */
+        .roi-box {
+            background: linear-gradient(135deg, #eff6ff, #f0f9ff);
+            border: 1px solid #bfdbfe;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin: 14px 0;
+        }
+        .roi-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            text-align: center;
+        }
+        .roi-item .value {
+            font-size: 22px;
+            font-weight: 800;
+            color: #1d4ed8;
+        }
+        .roi-item .label {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+        .roi-highlight {
+            background: #dbeafe;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-top: 12px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: #1e40af;
+        }
+
+        /* Timeline */
+        .timeline {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .timeline-item {
+            flex: 1;
+            background: #f9fafb;
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+            border-top: 3px solid #25D366;
+        }
+        .timeline-item .week {
+            font-size: 11px;
+            color: #25D366;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .timeline-item .task {
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* CTA */
+        .cta-box {
+            background: linear-gradient(135deg, #0a0e1a, #1a1f35);
+            color: white;
+            border-radius: 12px;
+            padding: 24px 28px;
+            margin-top: 24px;
+            text-align: center;
+        }
+        .cta-box h3 {
+            font-size: 16px;
+            margin-bottom: 8px;
+            color: #25D366;
+        }
+        .cta-box p {
+            font-size: 13px;
+            color: rgba(255,255,255,0.7);
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        /* VPS Specs */
+        .vps-specs {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        .spec-badge {
+            background: #f3f4f6;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            color: #4b5563;
+            font-weight: 500;
+        }
+
+        /* Print button */
+        .print-btn {
+            position: fixed;
+            bottom: 24px;
+            left: 24px;
+            background: #25D366;
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-family: 'Tajawal', sans-serif;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 16px rgba(37, 211, 102, 0.4);
+            z-index: 100;
+            transition: transform 0.2s;
+        }
+        .print-btn:hover { transform: translateY(-2px); }
+    </style>
+</head>
+<body>
+
+<button class="print-btn no-print" onclick="window.print()">📄 حفظ كـ PDF</button>
+
+<div class="page">
+    <!-- Header -->
+    <div class="header">
+        <div class="header-badge">جاهز للنشر ✅</div>
+        <h1>مقترح — نظام تنظيم صور أوامر العمل <span>تلقائياً</span></h1>
+        <div class="header-sub">إدارة تطوير الأعمال · يونيو 2026</div>
+    </div>
+
+    <div class="content">
+
+        <!-- المشكلة -->
+        <div class="section">
+            <div class="section-title">🔴 المشكلة</div>
+            <div class="problem-grid">
+                <div class="problem-item">
+                    <span class="icon">⏰</span>
+                    <div><strong>ضياع وقت</strong> — ~30 دقيقة/يوم لكل موظف في البحث والتنظيم اليدوي</div>
+                </div>
+                <div class="problem-item">
+                    <span class="icon">📸</span>
+                    <div><strong>صور مفقودة</strong> — تضيع أو تُنسب لأمر عمل خاطئ</div>
+                </div>
+                <div class="problem-item">
+                    <span class="icon">📱</span>
+                    <div><strong>لا أرشيف</strong> — الصور محصورة في ذاكرة الهواتف</div>
+                </div>
+                <div class="problem-item">
+                    <span class="icon">❓</span>
+                    <div><strong>لا تتبع</strong> — لا نعرف من أرسل ماذا ومتى</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- الحل -->
+        <div class="section">
+            <div class="section-title">✅ الحل</div>
+            <p style="font-size:13.5px; color:#374151; margin-bottom:8px;">بوت واتساب يعمل <strong>تلقائياً 24/7</strong> على سيرفر سحابي — الموظفون يرسلون صور كالمعتاد:</p>
+
+            <div class="flow-diagram">
+                <div class="flow-step">
+                    <span class="emoji">📱</span>
+                    <div class="label">واتساب</div>
+                    <div class="desc">الفريق يرسل صور + رقم أمر العمل</div>
+                </div>
+                <div class="flow-arrow">←</div>
+                <div class="flow-step">
+                    <span class="emoji">🤖</span>
+                    <div class="label">البوت (VPS)</div>
+                    <div class="desc">يستخرج الرقم ويربط الصور تلقائياً</div>
+                </div>
+                <div class="flow-arrow">←</div>
+                <div class="flow-step">
+                    <span class="emoji">📁</span>
+                    <div class="label">Synology NAS</div>
+                    <div class="desc">مجلد منظّم لكل أمر عمل</div>
+                </div>
+            </div>
+
+            <div class="features-grid">
+                <div class="feature-item"><span class="feature-check">✓</span> تنظيم تلقائي بالكامل — يعمل 24/7</div>
+                <div class="feature-item"><span class="feature-check">✓</span> لا يحتاج الموظفون تعلّم شيء جديد</div>
+                <div class="feature-item"><span class="feature-check">✓</span> منع تكرار الصور (بصمة رقمية)</div>
+                <div class="feature-item"><span class="feature-check">✓</span> لوحة تحكم ويب للمراقبة والبحث</div>
+                <div class="feature-item"><span class="feature-check">✓</span> ربط الصور بمرسلها فقط (أمان)</div>
+                <div class="feature-item"><span class="feature-check">✓</span> تأكيد فوري في المجموعة بعد الرفع</div>
+            </div>
+        </div>
+
+        <!-- التكاليف -->
+        <div class="section">
+            <div class="section-title">💰 التكاليف</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>البند</th>
+                        <th>التكلفة</th>
+                        <th>ملاحظات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>تطوير النظام</td>
+                        <td><span style="color:#059669; font-weight:700;">تم ✅</span></td>
+                        <td class="cost-note">جاهز للنشر — لا تكلفة إضافية</td>
+                    </tr>
+                    <tr>
+                        <td>VPS — Hostinger KVM 1</td>
+                        <td><span class="cost-value">~24 ر.س/شهر</span></td>
+                        <td class="cost-note">$6.49/شهر (اشتراك سنوي)</td>
+                    </tr>
+                    <tr>
+                        <td>تخزين — Synology NAS</td>
+                        <td><span style="color:#059669; font-weight:700;">متوفر ✅</span></td>
+                        <td class="cost-note">يستخدم NAS الشركة الحالي</td>
+                    </tr>
+                    <tr class="highlight-row">
+                        <td>الإجمالي السنوي</td>
+                        <td><span class="cost-value">~290 ر.س/سنة</span></td>
+                        <td class="cost-note">أقل من ريال/يوم</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="vps-specs">
+                <span class="spec-badge">🖥 AMD EPYC</span>
+                <span class="spec-badge">💾 4 GB RAM</span>
+                <span class="spec-badge">📦 50 GB NVMe</span>
+                <span class="spec-badge">🛡 حماية DDoS</span>
+                <span class="spec-badge">🔄 نسخ احتياطي أسبوعي</span>
+                <span class="spec-badge">📞 دعم 24/7</span>
+            </div>
+        </div>
+
+        <!-- العائد -->
+        <div class="section">
+            <div class="section-title">📈 العائد على الاستثمار</div>
+            <div class="roi-box">
+                <div class="roi-grid">
+                    <div class="roi-item">
+                        <div class="value">30 د</div>
+                        <div class="label">توفير يومي لكل موظف</div>
+                    </div>
+                    <div class="roi-item">
+                        <div class="value">50+ ساعة</div>
+                        <div class="label">عمل منتج إضافي/شهرياً<br>(لـ 5 موظفين)</div>
+                    </div>
+                    <div class="roi-item">
+                        <div class="value">0</div>
+                        <div class="label">صور مفقودة</div>
+                    </div>
+                </div>
+                <div class="roi-highlight">
+                    50+ ساعة عمل منتج شهرياً مقابل <strong>24 ريال فقط</strong>
+                </div>
+            </div>
+        </div>
+
+        <!-- خطة التنفيذ -->
+        <div class="section">
+            <div class="section-title">📅 خطة التنفيذ</div>
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="week">الأسبوع 1</div>
+                    <div class="task">حجز VPS + تثبيت النظام + ربط Synology NAS</div>
+                </div>
+                <div class="timeline-item">
+                    <div class="week">الأسبوع 2</div>
+                    <div class="task">تجربة مع مجموعة اختبار واحدة</div>
+                </div>
+                <div class="timeline-item">
+                    <div class="week">الأسبوع 3+</div>
+                    <div class="task">تفعيل على جميع مجموعات العمل</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- التوصية -->
+        <div class="cta-box">
+            <h3>التوصية</h3>
+            <p>النظام <strong>جاهز للنشر فوراً</strong>. التكلفة أقل من ريال يومياً والعائد كبير. نوصي بالموافقة على حجز VPS والبدء بالتجربة هذا الأسبوع.</p>
+        </div>
+
+    </div>
+</div>
+
+</body>
+</html>
