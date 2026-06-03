@@ -7,8 +7,7 @@
 // =============================================
 // Configuration
 // =============================================
-const API_BASE = '../api';
-const PROXY_BASE = 'api-proxy.php';
+const API_BASE = '/api';
 const REFRESH_INTERVAL = 10000; // 10 seconds
 
 let currentFilter = 'all';
@@ -43,7 +42,7 @@ async function refreshData() {
 
 async function loadStats() {
     try {
-        const res = await fetch(`${API_BASE}/stats.php`);
+        const res = await fetch(`${API_BASE}/stats`);
         const data = await res.json();
 
         if (data.success) {
@@ -62,7 +61,7 @@ async function loadStats() {
 async function loadUploads() {
     try {
         const searchVal = document.getElementById('searchInput')?.value || '';
-        let url = `${API_BASE}/uploads.php?limit=50`;
+        let url = `${API_BASE}/uploads?limit=50`;
 
         if (searchVal) url += `&wo=${encodeURIComponent(searchVal)}`;
         if (currentFilter !== 'all') url += `&status=${currentFilter}`;
@@ -88,7 +87,7 @@ async function loadUploads() {
 
 async function loadBotStatus() {
     try {
-        const res = await fetch(`${PROXY_BASE}?action=bot-status`);
+        const res = await fetch(`${API_BASE}/bot-status`);
         const data = await res.json();
 
         const badge = document.getElementById('botStatusBadge');
@@ -116,7 +115,7 @@ async function loadBotStatus() {
 
 async function loadLogs() {
     try {
-        const res = await fetch(`${PROXY_BASE}?action=logs`);
+        const res = await fetch(`${API_BASE}/logs`);
         const data = await res.json();
 
         const logsEl = document.getElementById('logsContent');

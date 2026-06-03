@@ -1,40 +1,40 @@
 @echo off
-echo WhatsToot Bot - Starting...
+chcp 65001 >nul 2>&1
+title WhatsToot Bot v2.0
+
+echo.
+echo ╔══════════════════════════════════════════╗
+echo ║   🤖 WhatsToot Bot v2.0 — Starting...   ║
+echo ╚══════════════════════════════════════════╝
 echo.
 
-:: Check if Node.js is installed
+cd /d "%~dp0"
+
+REM فحص Node.js
 where node >nul 2>&1
-if errorlevel 1 (
-    echo Node.js is not installed!
-    echo Please download and install from: https://nodejs.org/
+if %errorlevel% neq 0 (
+    echo ❌ Node.js غير مثبت!
+    echo    حمّل من: https://nodejs.org
     pause
     exit /b 1
 )
+echo   ✅ Node.js detected
 
-:: Start Node.js WhatsApp Bot
-echo Starting WhatsApp Bot (Node.js)...
-pushd "%~dp0node-bot"
-start "WhatsToot - WhatsApp Bot" cmd /k "node server.js"
-popd
-
-:: Wait a moment
-timeout /t 3 /nobreak >nul
-
-:: Start PHP Queue Worker
-echo Starting Queue Worker (PHP)...
-set "PHP_BIN=php"
-if exist "C:\xampp\php\php.exe" (
-    set "PHP_BIN=C:\xampp\php\php.exe"
+REM تثبيت التبعيات إذا لزم
+if not exist "node_modules" (
+    echo ⚠️  جاري تثبيت التبعيات...
+    npm install --production
 )
-pushd "%~dp0"
-start "WhatsToot - Queue Worker" cmd /k ""%PHP_BIN%" worker.php"
-popd
+
+REM إنشاء المجلدات
+if not exist "storage\temp" mkdir storage\temp
+if not exist "storage\logs" mkdir storage\logs
+if not exist "database" mkdir database
 
 echo.
-echo Bot started successfully!
+echo 🚀 تشغيل WhatsToot Bot...
 echo.
-echo Dashboard: http://localhost/whatstoot/public/
-echo Node API:  http://localhost:3000/status
-echo.
-echo Press any key to close...
-pause >nul
+
+node server.js
+
+pause

@@ -1,17 +1,13 @@
 # Dependencies
-/vendor/
-/node-bot/node_modules/
-/node-bot/.wwebjs_auth/
-/node-bot/.wwebjs_cache/
+node_modules/
 
-# Environment & Credentials
+# Environment
 .env
-credentials/
 
 # Database
-database/*.sqlite
-database/*.sqlite-shm
-database/*.sqlite-wal
+database/bot.sqlite
+database/bot.sqlite-shm
+database/bot.sqlite-wal
 
 # Storage
 storage/temp/*
@@ -19,13 +15,20 @@ storage/logs/*
 !storage/temp/.gitkeep
 !storage/logs/.gitkeep
 
-# IDE
-.idea/
-.vscode/
+# WhatsApp session
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Credentials
+credentials/*.json
+!credentials/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
+# IDE
+.vscode/
+.idea/
