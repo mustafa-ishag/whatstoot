@@ -25,7 +25,21 @@ APP_DIR="/var/www/whatstoot"
 APP_USER="www-data"
 APP_GROUP="www-data"
 DOMAIN="whatstoot.example.com"  # ← غيّر هذا بدومينك
-PHP_VERSION="8.1"               # ← أو 8.2, 8.3 حسب المتوفر
+# تحديد إصدار PHP تلقائياً حسب نظام التشغيل إذا لم يتم تمريره كمتغير بيئة
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "24.04" ]; then
+        DEFAULT_PHP="8.3"
+    elif [ "$ID" = "debian" ] && [ "$VERSION_ID" = "12" ]; then
+        DEFAULT_PHP="8.2"
+    else
+        DEFAULT_PHP="8.1"
+    fi
+else
+    DEFAULT_PHP="8.1"
+fi
+
+PHP_VERSION="${PHP_VERSION:-$DEFAULT_PHP}"               # ← تم التحديد تلقائياً (يمكنك تجاوزه بتمرير قيمة)
 
 # =============================================
 # ألوان المخرجات
