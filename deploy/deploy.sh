@@ -96,11 +96,13 @@ apt install -y \
     php${PHP_VERSION}-mbstring \
     php${PHP_VERSION}-xml \
     php${PHP_VERSION}-fileinfo \
-    php${PHP_VERSION}-json \
     curl \
     git \
     unzip \
-    sqlite3
+    sqlite3 \
+    libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
+    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxrandr2 libgbm1 libpango-1.0-0 libasound2t64
 
 log_success "تم تثبيت حزم PHP و Nginx"
 
