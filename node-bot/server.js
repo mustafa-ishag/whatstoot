@@ -8,16 +8,43 @@ const path = require('path');
 // ⚙️ إعدادات النظام
 // =============================================
 
-// تحميل إعدادات WORK_ORDER_DIGITS من .env يدوياً لعدم الاعتماد على مكتبات خارجية
+// تحميل إعدادات من .env يدوياً لعدم الاعتماد على مكتبات خارجية
 let workOrderDigits = 9;
+let envPHP_API_URL = null;
+let envAPI_KEY = null;
+let envMONITORED_GROUPS = null;
+let envPORT = null;
+
 try {
     const envPath = path.join(__dirname, '../.env');
     if (fs.existsSync(envPath)) {
         const envContent = fs.readFileSync(envPath, 'utf8');
-        const match = envContent.match(/^WORK_ORDER_DIGITS\s*=\s*(\d+)/m);
-        if (match) {
-            workOrderDigits = parseInt(match[1], 10);
+
+        const matchDigits = envContent.match(/^WORK_ORDER_DIGITS\s*=\s*(\d+)/m);
+        if (matchDigits) {
+            workOrderDigits = parseInt(matchDigits[1], 10);
             console.log(`📋 تم تحميل عدد أرقام أمر العمل من .env: ${workOrderDigits}`);
+        }
+
+        const matchPHP = envContent.match(/^PHP_API_URL\s*=\s*(.+)/m);
+        if (matchPHP) {
+            envPHP_API_URL = matchPHP[1].trim();
+            console.log(`🌐 PHP API URL: ${envPHP_API_URL}`);
+        }
+
+        const matchKey = envContent.match(/^NODE_BOT_API_KEY\s*=\s*(.+)/m);
+        if (matchKey) {
+            envAPI_KEY = matchKey[1].trim();
+        }
+
+        const matchGroups = envContent.match(/^MONITORED_GROUPS\s*=\s*(.+)/m);
+        if (matchGroups) {
+            envMONITORED_GROUPS = matchGroups[1].trim();
+        }
+
+        const matchPort = envContent.match(/^NODE_BOT_PORT\s*=\s*(\d+)/m);
+        if (matchPort) {
+            envPORT = parseInt(matchPort[1], 10);
         }
     }
 } catch (e) {
@@ -30,12 +57,12 @@ const woPattern = new RegExp(`(?<!\\d)\\d{${workOrderDigits}}(?!\\d)`);
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
-const PORT = process.env.PORT || 3000;
-const PHP_API_URL = process.env.PHP_API_URL || 'http://localhost/whatstoot/api';
-const API_KEY = process.env.API_KEY || 'whatstoot_bot_2026_secure_key';
+const PORT = envPORT || process.env.PORT || 3000;
+const PHP_API_URL = envPHP_API_URL || process.env.PHP_API_URL || 'http://localhost/api';
+const API_KEY = envAPI_KEY || process.env.API_KEY || 'whatstoot_bot_2026_secure_key';
 
 // المجموعات المراقبة ('all' أو مصفوفة من IDs)
-let monitoredGroups = process.env.MONITORED_GROUPS || 'all';
+let monitoredGroups = envMONITORED_GROUPS || process.env.MONITORED_GROUPS || 'all';
 
 // إحصائيات مباشرة
 let stats = {

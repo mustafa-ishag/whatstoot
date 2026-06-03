@@ -48,7 +48,9 @@ define('AWAIT_TIMEOUT_SECONDS', (int) ($_ENV['AWAIT_TIMEOUT_SECONDS'] ?? 90));
 // =============================================
 // App Settings
 // =============================================
-define('APP_DEBUG', filter_var($_ENV['APP_DEBUG'] ?? 'true', FILTER_VALIDATE_BOOLEAN));
+define('APP_ENV', $_ENV['APP_ENV'] ?? 'production');
+define('APP_URL', $_ENV['APP_URL'] ?? 'http://localhost');
+define('APP_DEBUG', filter_var($_ENV['APP_DEBUG'] ?? 'false', FILTER_VALIDATE_BOOLEAN));
 define('APP_TIMEZONE', $_ENV['APP_TIMEZONE'] ?? 'Asia/Riyadh');
 define('AUTO_REPLY_ENABLED', filter_var($_ENV['AUTO_REPLY_ENABLED'] ?? 'true', FILTER_VALIDATE_BOOLEAN));
 

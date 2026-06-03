@@ -67,7 +67,7 @@ class DriveUploader
                     $this->logger->info('OAuth token refreshed');
                 } else {
                     throw new \RuntimeException(
-                        'OAuth refresh token missing. Run setup-oauth.php again: http://localhost/whatstoot/setup-oauth.php'
+                        'OAuth refresh token missing. Run setup-oauth.php again: ' . (defined('APP_URL') ? rtrim(APP_URL, '/') . '/../setup-oauth.php' : 'setup-oauth.php')
                     );
                 }
             }
@@ -95,9 +95,10 @@ class DriveUploader
         }
 
         // لا توجد بيانات مصادقة
+        $setupUrl = defined('APP_URL') ? rtrim(APP_URL, '/') . '/../setup-oauth.php' : 'setup-oauth.php';
         throw new \RuntimeException(
             "Google Drive credentials not found.\n" .
-            "Run the OAuth setup: http://localhost/whatstoot/setup-oauth.php\n" .
+            "Run the OAuth setup: {$setupUrl}\n" .
             "Or place service account JSON in: credentials/"
         );
     }

@@ -10,6 +10,8 @@ credentials/
 
 # Database
 database/*.sqlite
+database/*.sqlite-shm
+database/*.sqlite-wal
 
 # Storage
 storage/temp/*

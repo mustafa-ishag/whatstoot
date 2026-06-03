@@ -1,0 +1,48 @@
+##############################################
+# WhatsToot — PHP Queue Worker Service
+#
+# تثبيت:
+#   sudo cp whatstoot-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable whatstoot-worker
+#   sudo systemctl start whatstoot-worker
+#
+# مراقبة:
+#   sudo systemctl status whatstoot-worker
+#   sudo journalctl -u whatstoot-worker -f
+##############################################
+
+[Unit]
+Description=WhatsToot Queue Worker (PHP)
+Documentation=https://github.com/mustafa-ishag/whatstoot
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+
+# ← غيّر المسار إلى مسار المشروع الفعلي
+WorkingDirectory=/var/www/whatstoot
+
+# تشغيل PHP worker
+ExecStart=/usr/bin/php worker.php
+
+# إعادة التشغيل التلقائي
+Restart=always
+RestartSec=10
+
+# سجلات
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatstoot-worker
+
+# أمان إضافي
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/whatstoot/storage
+ReadWritePaths=/var/www/whatstoot/database
+
+[Install]
+WantedBy=multi-user.target

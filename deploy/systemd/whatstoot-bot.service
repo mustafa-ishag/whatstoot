@@ -1,0 +1,57 @@
+##############################################
+# WhatsToot — Node.js WhatsApp Bot Service
+#
+# تثبيت:
+#   sudo cp whatstoot-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable whatstoot-bot
+#   sudo systemctl start whatstoot-bot
+#
+# مراقبة:
+#   sudo systemctl status whatstoot-bot
+#   sudo journalctl -u whatstoot-bot -f
+##############################################
+
+[Unit]
+Description=WhatsToot WhatsApp Bot (Node.js)
+Documentation=https://github.com/mustafa-ishag/whatstoot
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+
+# ← غيّر المسار إلى مسار المشروع الفعلي
+WorkingDirectory=/var/www/whatstoot/node-bot
+
+# تشغيل Node.js server
+ExecStart=/usr/bin/node server.js
+
+# متغيرات البيئة
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+# إعادة التشغيل التلقائي
+Restart=always
+RestartSec=10
+
+# حدود الموارد
+LimitNOFILE=65536
+
+# سجلات
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatstoot-bot
+
+# أمان إضافي
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/whatstoot/node-bot/.wwebjs_auth
+ReadWritePaths=/var/www/whatstoot/node-bot/.wwebjs_cache
+ReadWritePaths=/var/www/whatstoot/storage
+ReadWritePaths=/var/www/whatstoot/database
+
+[Install]
+WantedBy=multi-user.target

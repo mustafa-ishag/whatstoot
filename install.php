@@ -198,8 +198,15 @@ if (empty($errors)) {
     output('الخطوات التالية:', 'step');
     output('1. عدّل ملف .env بإعداداتك', 'info');
     output('2. ضع ملف google-service-account.json في credentials/', 'info');
-    output('3. شغّل start-bot.bat لتشغيل البوت', 'info');
-    output('4. افتح http://localhost/whatstoot/public/ للوحة التحكم', 'info');
+
+    if (PHP_OS_FAMILY === 'Windows') {
+        output('3. شغّل start-bot.bat لتشغيل البوت', 'info');
+        output('4. افتح http://localhost/whatstoot/public/ للوحة التحكم', 'info');
+    } else {
+        output('3. شغّل: bash start-bot.sh (تشغيل يدوي)', 'info');
+        output('   أو استخدم systemd: sudo bash deploy/deploy.sh', 'info');
+        output('4. راجع DEPLOY.md لدليل النشر الكامل', 'info');
+    }
 } else {
     output('⚠ التثبيت يحتاج إصلاح ' . count($errors) . ' مشاكل:', 'warning');
     foreach ($errors as $i => $err) {

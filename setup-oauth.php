@@ -13,6 +13,7 @@
  */
 
 require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . '/config/app.php';
 
 session_start();
 
@@ -54,7 +55,7 @@ if (!file_exists($credentialsPath)) {
     echo "<div class='step'><div class='step-num'>1</div><div>اذهب إلى <a href='https://console.cloud.google.com/apis/credentials' target='_blank' style='color:#4285F4'>Google Cloud Console → Credentials</a></div></div>";
     echo "<div class='step'><div class='step-num'>2</div><div>اضغط <strong>+ CREATE CREDENTIALS</strong> → <strong>OAuth client ID</strong></div></div>";
     echo "<div class='step'><div class='step-num'>3</div><div>Application type: <strong>Web application</strong></div></div>";
-    echo "<div class='step'><div class='step-num'>4</div><div>أضف في Authorized redirect URIs:<br><code>http://localhost/whatstoot/setup-oauth.php</code></div></div>";
+    echo "<div class='step'><div class='step-num'>4</div><div>أضف في Authorized redirect URIs:<br><code>" . htmlspecialchars($redirectUri) . "</code></div></div>";
     echo "<div class='step'><div class='step-num'>5</div><div>اضغط <strong>DOWNLOAD JSON</strong> من الـ Client المنشأ</div></div>";
     echo "<div class='step'><div class='step-num'>6</div><div>سمّ الملف <code>oauth-client.json</code> وضعه في:<br><code>credentials/oauth-client.json</code></div></div>";
     echo "<div class='step'><div class='step-num'>7</div><div>ارجع وحدّث هذه الصفحة</div></div>";
@@ -67,12 +68,17 @@ if (!file_exists($credentialsPath)) {
 // =============================================
 // إعداد Google Client
 // =============================================
+// تحديد Redirect URI ديناميكياً من الطلب الحالي
+$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$redirectUri = $scheme . '://' . $host . strtok($_SERVER['REQUEST_URI'] ?? '/setup-oauth.php', '?');
+
 $client = new Google\Client();
 $client->setAuthConfig($credentialsPath);
 $client->addScope(Google\Service\Drive::DRIVE);
 $client->setAccessType('offline');
 $client->setPrompt('consent');
-$client->setRedirectUri('http://localhost/whatstoot/setup-oauth.php');
+$client->setRedirectUri($redirectUri);
 
 // =============================================
 // إذا كان Token موجود بالفعل
