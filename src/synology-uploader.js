@@ -8,7 +8,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const FormData = require('form-data');
 const config = require('./config');
 const db = require('./database');
 
@@ -307,17 +306,17 @@ class SynologyUploader {
     async uploadFile(localPath, destPath, fileName) {
         const url = `${this.baseUrl}/webapi/entry.cgi?_sid=${encodeURIComponent(this.sid)}`;
 
-        const form = new FormData();
+        const form = new FormData(); // Native FormData in Node 18+
         form.append('api', 'SYNO.FileStation.Upload');
         form.append('version', '2');
         form.append('method', 'upload');
         form.append('path', destPath);
         form.append('create_parents', 'true');
         form.append('overwrite', 'false');
-        form.append('file', fs.createReadStream(localPath), {
-            filename: fileName,
-            contentType: this.getMimeType(localPath),
-        });
+        
+        const fileBuffer = fs.readFileSync(localPath);
+        const blob = new Blob([fileBuffer], { type: this.getMimeType(localPath) });
+        form.append('file', blob, fileName);
 
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 120000);
@@ -326,7 +325,7 @@ class SynologyUploader {
             const response = await fetch(url, {
                 method: 'POST',
                 body: form,
-                headers: form.getHeaders(),
+                // Do NOT set headers; native fetch automatically sets boundary for FormData
                 signal: controller.signal,
             });
 
