@@ -40,7 +40,9 @@ fi
 # =============================================
 echo "📁 إعداد المجلدات..."
 sudo mkdir -p "$APP_DIR"
-sudo cp -r . "$APP_DIR/"
+if [ "$(pwd)" != "$APP_DIR" ]; then
+    sudo cp -r . "$APP_DIR/"
+fi
 sudo mkdir -p "$APP_DIR/storage/temp" "$APP_DIR/storage/logs" "$APP_DIR/database"
 sudo chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
