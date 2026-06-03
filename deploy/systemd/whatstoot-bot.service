@@ -31,6 +31,7 @@ ExecStart=/usr/bin/node server.js
 # متغيرات البيئة
 Environment=NODE_ENV=production
 Environment=PORT=3000
+Environment=PUPPETEER_CACHE_DIR=/var/www/whatstoot/node-bot/.wwebjs_cache/puppeteer
 
 # إعادة التشغيل التلقائي
 Restart=always

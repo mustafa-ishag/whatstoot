@@ -141,6 +141,8 @@ mkdir -p "$APP_DIR/storage/temp"
 mkdir -p "$APP_DIR/storage/logs"
 mkdir -p "$APP_DIR/database"
 mkdir -p "$APP_DIR/credentials"
+mkdir -p "$APP_DIR/node-bot/.wwebjs_auth"
+mkdir -p "$APP_DIR/node-bot/.wwebjs_cache"
 log_success "تم إنشاء المجلدات المطلوبة"
 
 # =============================================
@@ -156,7 +158,8 @@ fi
 
 if [ -f "$APP_DIR/node-bot/package.json" ]; then
     cd "$APP_DIR/node-bot"
-    npm install --production
+    # تحديد مسار تحميل متصفح Puppeteer داخل المشروع لتفادي مشاكل الصلاحيات
+    PUPPETEER_CACHE_DIR="$APP_DIR/node-bot/.wwebjs_cache/puppeteer" npm install --production
     log_success "تم تثبيت تبعيات Node.js (npm)"
 fi
 
