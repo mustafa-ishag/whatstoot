@@ -144,7 +144,7 @@ function renderUploads(uploads) {
     if (uploads.length === 0) {
         tbody.innerHTML = `
             <tr class="empty-row">
-                <td colspan="7">
+                <td colspan="8">
                     <div class="empty-state">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                             <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
@@ -172,8 +172,14 @@ function renderUploads(uploads) {
             ? `<a href="${escapeHtml(u.drive_url)}" target="_blank" class="drive-link">فتح ↗</a>`
             : '<span style="color:var(--text-muted)">—</span>';
 
+        const isImage = u.status === 'completed' && u.drive_id;
+        const thumbHtml = isImage
+            ? `<div class="thumb-cell" onclick="openLightbox(${u.id}, '${escapeHtml(u.work_order)}', '${escapeHtml(u.file_name)}')"><img src="/api/image-thumb/${u.id}?size=small" alt="معاينة" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\'thumb-placeholder\'>🖼</span>'"></div>`
+            : '<span class="thumb-placeholder">—</span>';
+
         return `
             <tr>
+                <td>${thumbHtml}</td>
                 <td><span class="wo-number">${escapeHtml(u.work_order)}</span></td>
                 <td><span class="file-name" title="${escapeHtml(u.file_name)}">${escapeHtml(u.file_name)}</span></td>
                 <td><span class="group-name" title="${escapeHtml(u.group_name || '')}">${escapeHtml(u.group_name || '—')}</span></td>
@@ -307,3 +313,45 @@ function showToast(message, type = 'info') {
         setTimeout(() => toast.remove(), 300);
     }, 4000);
 }
+
+// =============================================
+// Lightbox
+// =============================================
+
+function openLightbox(uploadId, workOrder, fileName) {
+    const overlay = document.getElementById('lightboxOverlay');
+    const img = document.getElementById('lightboxImage');
+    const spinner = document.getElementById('lightboxSpinner');
+    const info = document.getElementById('lightboxInfo');
+
+    // Reset state
+    img.style.opacity = '0';
+    img.src = '';
+    spinner.style.display = 'flex';
+
+    // Show overlay
+    overlay.classList.add('active');
+    document.body.style.overflow = 'hidden';
+
+    // Load full image
+    img.src = `/api/image-full/${uploadId}`;
+    info.innerHTML = `<span class="lightbox-wo">أمر عمل: ${escapeHtml(workOrder)}</span> <span class="lightbox-file">${escapeHtml(fileName)}</span>`;
+}
+
+function closeLightbox() {
+    const overlay = document.getElementById('lightboxOverlay');
+    const img = document.getElementById('lightboxImage');
+
+    overlay.classList.remove('active');
+    document.body.style.overflow = '';
+
+    // Cleanup after animation
+    setTimeout(() => {
+        img.src = '';
+    }, 300);
+}
+
+// Close on Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeLightbox();
+});

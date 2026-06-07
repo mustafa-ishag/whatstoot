@@ -157,6 +157,7 @@
                 <table id="uploadsTable">
                     <thead>
                         <tr>
+                            <th>معاينة</th>
                             <th>أمر العمل</th>
                             <th>اسم الملف</th>
                             <th>المجموعة</th>
@@ -168,7 +169,7 @@
                     </thead>
                     <tbody id="uploadsBody">
                         <tr class="empty-row">
-                            <td colspan="7">
+                            <td colspan="8">
                                 <div class="empty-state">
                                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                         <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
@@ -193,6 +194,19 @@
         </section>
 
     </main>
+
+    <!-- Lightbox Modal -->
+    <div class="lightbox-overlay" id="lightboxOverlay" onclick="closeLightbox()">
+        <div class="lightbox-content" onclick="event.stopPropagation()">
+            <button class="lightbox-close" onclick="closeLightbox()" title="إغلاق">&times;</button>
+            <div class="lightbox-spinner" id="lightboxSpinner">
+                <div class="spinner"></div>
+                <span>جاري التحميل...</span>
+            </div>
+            <img id="lightboxImage" src="" alt="صورة بالحجم الكامل" onload="document.getElementById('lightboxSpinner').style.display='none'; this.style.opacity='1';">
+            <div class="lightbox-info" id="lightboxInfo"></div>
+        </div>
+    </div>
 
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>

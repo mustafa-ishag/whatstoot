@@ -395,6 +395,104 @@ class SynologyUploader {
     }
 
     /**
+     * جلب صورة مصغّرة من Synology
+     * @param {string} filePath المسار الكامل للملف على NAS
+     * @param {'small'|'medium'|'large'} size حجم الصورة المصغّرة
+     * @returns {Promise<Buffer>} بيانات الصورة
+     */
+    async getThumbnail(filePath, size = 'medium') {
+        await this.ensureInitialized();
+
+        const params = new URLSearchParams({
+            api: 'SYNO.FileStation.Thumb',
+            version: '2',
+            method: 'get',
+            path: filePath,
+            size,
+            _sid: this.sid,
+        });
+
+        const url = `${this.baseUrl}/webapi/entry.cgi?${params.toString()}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+
+        try {
+            const response = await fetch(url, { signal: controller.signal });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const contentType = response.headers.get('content-type') || '';
+            // إذا أرجع JSON فهذا يعني خطأ
+            if (contentType.includes('application/json')) {
+                const data = await response.json();
+                if (data.error?.code == 119) {
+                    await this.reLogin();
+                    return this.getThumbnail(filePath, size);
+                }
+                throw new Error(`Thumbnail error: ${JSON.stringify(data.error)}`);
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            return buffer;
+        } catch (e) {
+            if (e.name === 'AbortError') throw new Error('Thumbnail fetch timeout');
+            throw e;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    /**
+     * تحميل ملف كامل من Synology
+     * @param {string} filePath المسار الكامل للملف على NAS
+     * @returns {Promise<{buffer: Buffer, contentType: string}>}
+     */
+    async downloadFile(filePath) {
+        await this.ensureInitialized();
+
+        const params = new URLSearchParams({
+            api: 'SYNO.FileStation.Download',
+            version: '2',
+            method: 'download',
+            path: filePath,
+            mode: 'download',
+            _sid: this.sid,
+        });
+
+        const url = `${this.baseUrl}/webapi/entry.cgi?${params.toString()}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 60000);
+
+        try {
+            const response = await fetch(url, { signal: controller.signal });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                const data = await response.json();
+                if (data.error?.code == 119) {
+                    await this.reLogin();
+                    return this.downloadFile(filePath);
+                }
+                throw new Error(`Download error: ${JSON.stringify(data.error)}`);
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            return { buffer, contentType: contentType || this.getMimeType(filePath) };
+        } catch (e) {
+            if (e.name === 'AbortError') throw new Error('Download timeout');
+            throw e;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    /**
      * التأكد من تهيئة الاتصال
      */
     async ensureInitialized() {

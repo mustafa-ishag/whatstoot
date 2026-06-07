@@ -94,6 +94,11 @@ function getUploads(limit = 50, offset = 0, woFilter = null, status = null) {
     return db.prepare(sql).all(...params);
 }
 
+function getUploadById(id) {
+    const db = getInstance();
+    return db.prepare('SELECT * FROM uploads WHERE id = ?').get(id) || null;
+}
+
 // =============================================
 // 📁 Folders
 // =============================================
@@ -326,7 +331,7 @@ module.exports = {
     getInstance,
     applySchema,
     // Uploads
-    logUpload, getUploads,
+    logUpload, getUploads, getUploadById,
     // Folders
     getFolder, saveFolder,
     // Context

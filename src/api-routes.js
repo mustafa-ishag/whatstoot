@@ -346,6 +346,73 @@ function register(app, bot, uploader, logger) {
             res.json({ success: false, error: e.message });
         }
     });
+
+    // =============================================
+    // 🖼 استعراض صورة مصغّرة
+    // GET /api/image-thumb/:id
+    // =============================================
+    app.get('/api/image-thumb/:id', async (req, res) => {
+        try {
+            const uploadId = parseInt(req.params.id);
+            if (!uploadId) return res.status(400).send('Invalid ID');
+
+            const upload = db.getUploadById(uploadId);
+
+            if (!upload || !upload.drive_id) {
+                return res.status(404).send('Image not found');
+            }
+
+            if (!uploader.getThumbnail) {
+                return res.status(501).send('Thumbnails not supported with current storage');
+            }
+
+            const thumbBuffer = await uploader.getThumbnail(upload.drive_id, req.query.size || 'medium');
+
+            res.set({
+                'Content-Type': 'image/jpeg',
+                'Cache-Control': 'public, max-age=3600',
+                'X-Work-Order': upload.work_order,
+            });
+            res.send(thumbBuffer);
+        } catch (e) {
+            logger.warning(`Thumbnail proxy error: ${e.message}`);
+            res.status(500).send('Could not load thumbnail');
+        }
+    });
+
+    // =============================================
+    // 🖼 استعراض الصورة بالحجم الكامل
+    // GET /api/image-full/:id
+    // =============================================
+    app.get('/api/image-full/:id', async (req, res) => {
+        try {
+            const uploadId = parseInt(req.params.id);
+            if (!uploadId) return res.status(400).send('Invalid ID');
+
+            const upload = db.getUploadById(uploadId);
+
+            if (!upload || !upload.drive_id) {
+                return res.status(404).send('Image not found');
+            }
+
+            if (!uploader.downloadFile) {
+                return res.status(501).send('Download not supported with current storage');
+            }
+
+            const { buffer, contentType } = await uploader.downloadFile(upload.drive_id);
+
+            res.set({
+                'Content-Type': contentType,
+                'Cache-Control': 'public, max-age=3600',
+                'X-Work-Order': upload.work_order,
+                'X-File-Name': upload.file_name,
+            });
+            res.send(buffer);
+        } catch (e) {
+            logger.warning(`Image proxy error: ${e.message}`);
+            res.status(500).send('Could not load image');
+        }
+    });
 }
 
 module.exports = { register };
