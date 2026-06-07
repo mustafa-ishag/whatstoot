@@ -98,15 +98,17 @@ function getUploads(limit = 50, offset = 0, woFilter = null, status = null) {
 // 📁 Folders
 // =============================================
 
-function getFolder(workOrder) {
+function getFolder(workOrder, subFolder = null) {
     const db = getInstance();
-    const row = db.prepare('SELECT drive_id FROM folders WHERE work_order = ?').get(workOrder);
+    const key = subFolder ? `${workOrder}_${subFolder}` : workOrder;
+    const row = db.prepare('SELECT drive_id FROM folders WHERE work_order = ?').get(key);
     return row ? row.drive_id : null;
 }
 
-function saveFolder(workOrder, driveId) {
+function saveFolder(workOrder, driveId, subFolder = null) {
     const db = getInstance();
-    db.prepare('INSERT OR REPLACE INTO folders (work_order, drive_id) VALUES (?, ?)').run(workOrder, driveId);
+    const key = subFolder ? `${workOrder}_${subFolder}` : workOrder;
+    db.prepare('INSERT OR REPLACE INTO folders (work_order, drive_id) VALUES (?, ?)').run(key, driveId);
 }
 
 // =============================================
@@ -303,7 +305,7 @@ function resetWorkOrder(workOrder) {
 function getUploadsForMove(fromWO, count) {
     const db = getInstance();
     return db.prepare(`
-        SELECT id, file_name, file_hash, drive_id 
+        SELECT id, file_name, file_hash, drive_id, group_id, group_name, sender 
         FROM uploads 
         WHERE work_order = ? AND status = 'completed' 
         ORDER BY id DESC 
@@ -311,9 +313,13 @@ function getUploadsForMove(fromWO, count) {
     `).all(fromWO, count);
 }
 
-function updateUploadWorkOrder(id, toWO) {
+function updateUploadWorkOrder(id, toWO, driveId = null) {
     const db = getInstance();
-    db.prepare('UPDATE uploads SET work_order = ? WHERE id = ?').run(toWO, id);
+    if (driveId) {
+        db.prepare('UPDATE uploads SET work_order = ?, drive_id = ? WHERE id = ?').run(toWO, driveId, id);
+    } else {
+        db.prepare('UPDATE uploads SET work_order = ? WHERE id = ?').run(toWO, id);
+    }
 }
 
 module.exports = {

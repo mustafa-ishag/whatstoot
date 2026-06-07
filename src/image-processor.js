@@ -137,7 +137,8 @@ class ImageProcessor {
             }
 
             // 5. رفع إلى Storage (Synology/Drive)
-            const folderId = await this.uploader.getOrCreateFolder(workOrder);
+            const subFolder = group_id ? group_name : sender;
+            const folderId = await this.uploader.getOrCreateFolder(workOrder, subFolder);
             const fileName = this.uploader.buildFileName(workOrder, ext);
             const result = await this.uploader.upload(tempPath, folderId, fileName);
 

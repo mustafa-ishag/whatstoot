@@ -173,22 +173,31 @@ function register(app, bot, uploader, logger) {
                 return res.json({ success: false, message: `لا توجد صور في أمر العمل ${from_wo}` });
             }
 
-            const newFolder = await uploader.getOrCreateFolder(to_wo);
-            const oldFolder = await uploader.getOrCreateFolder(from_wo);
-
             let moved = 0;
             const movedFiles = [];
 
             for (const img of images) {
-                db.updateUploadWorkOrder(img.id, to_wo);
+                const targetSubFolder = img.group_id ? img.group_name : img.sender;
+                const newFolder = await uploader.getOrCreateFolder(to_wo, targetSubFolder);
+                
+                let sourcePath = img.drive_id;
+                if (!sourcePath) {
+                    const oldFolder = await uploader.getOrCreateFolder(from_wo, targetSubFolder);
+                    sourcePath = oldFolder + '/' + img.file_name;
+                }
+
+                let newDriveId = null;
 
                 try {
                     if (uploader.moveFile) {
-                        await uploader.moveFile(oldFolder + '/' + img.file_name, newFolder);
+                        await uploader.moveFile(sourcePath, newFolder);
+                        newDriveId = newFolder + '/' + img.file_name;
                     }
                 } catch (e) {
                     logger.warning(`Could not move file ${img.file_name} on NAS: ${e.message}`);
                 }
+
+                db.updateUploadWorkOrder(img.id, to_wo, newDriveId);
 
                 moved++;
                 movedFiles.push(img.file_name);

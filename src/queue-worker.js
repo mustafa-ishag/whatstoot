@@ -102,7 +102,8 @@ class QueueWorker {
                 const workOrder = item.work_order || 'UNSORTED';
 
                 // رفع
-                const folderId = await this.uploader.getOrCreateFolder(workOrder);
+                const subFolder = item.group_id ? item.group_name : item.sender;
+                const folderId = await this.uploader.getOrCreateFolder(workOrder, workOrder === 'UNSORTED' ? null : subFolder);
                 const ext = this._getExtension(imagePath);
                 const fileName = this.uploader.buildFileName(workOrder, ext);
                 const result = await this.uploader.upload(imagePath, folderId, fileName);
@@ -170,7 +171,8 @@ class QueueWorker {
                 }
 
                 const workOrder = item.work_order;
-                const folderId = await this.uploader.getOrCreateFolder(workOrder);
+                const subFolder = item.group_id ? item.group_name : item.sender;
+                const folderId = await this.uploader.getOrCreateFolder(workOrder, subFolder);
                 const ext = this._getExtension(imagePath);
                 const fileName = this.uploader.buildFileName(workOrder, ext);
                 const result = await this.uploader.upload(imagePath, folderId, fileName);

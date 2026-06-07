@@ -108,29 +108,50 @@ class SynologyUploader {
      * الحصول على أو إنشاء مجلد لرقم أمر عمل
      * @returns {string} المسار الكامل للمجلد
      */
-    async getOrCreateFolder(workOrder) {
+    async getOrCreateFolder(workOrder, subFolder = null) {
         await this.ensureInitialized();
 
         const folderPath = this.basePath + '/' + workOrder;
 
-        // 1. البحث في قاعدة البيانات أولاً
+        // 1. البحث في قاعدة البيانات أولاً للمجلد الأساسي
         const cachedPath = db.getFolder(workOrder);
-        if (cachedPath) return cachedPath;
-
-        // 2. محاولة إنشاء المجلد
-        try {
-            await this.createFolder(workOrder);
-        } catch (e) {
-            if (e.message.includes('119')) {
-                await this.reLogin();
-                await this.createFolder(workOrder);
-            } else {
-                throw e;
+        if (!cachedPath) {
+            // 2. محاولة إنشاء المجلد الأساسي
+            try {
+                await this.createFolder(this.basePath, workOrder);
+            } catch (e) {
+                if (e.message.includes('119')) {
+                    await this.reLogin();
+                    await this.createFolder(this.basePath, workOrder);
+                } else {
+                    throw e;
+                }
             }
+            db.saveFolder(workOrder, folderPath);
+            this.logger.info(`Folder ready for WO ${workOrder}: ${folderPath}`);
         }
 
-        db.saveFolder(workOrder, folderPath);
-        this.logger.info(`Folder ready for WO ${workOrder}: ${folderPath}`);
+        if (subFolder) {
+            const cleanSubFolder = subFolder.replace(/[\\/:*?"<>|]/g, '-').trim() || 'General';
+            const subFolderPath = folderPath + '/' + cleanSubFolder;
+            
+            const cachedSub = db.getFolder(workOrder, cleanSubFolder);
+            if (cachedSub) return cachedSub;
+
+            try {
+                await this.createFolder(folderPath, cleanSubFolder);
+            } catch (e) {
+                if (e.message.includes('119')) {
+                    await this.reLogin();
+                    await this.createFolder(folderPath, cleanSubFolder);
+                } else {
+                    throw e;
+                }
+            }
+            db.saveFolder(workOrder, subFolderPath, cleanSubFolder);
+            this.logger.info(`Subfolder ready for WO ${workOrder}/${cleanSubFolder}: ${subFolderPath}`);
+            return subFolderPath;
+        }
 
         return folderPath;
     }
@@ -283,12 +304,12 @@ class SynologyUploader {
     /**
      * إنشاء مجلد جديد
      */
-    async createFolder(name) {
+    async createFolder(parentPath, name) {
         const response = await this.apiRequest('/webapi/entry.cgi', {
             api: 'SYNO.FileStation.CreateFolder',
             version: 2,
             method: 'create',
-            folder_path: JSON.stringify([this.basePath]),
+            folder_path: JSON.stringify([parentPath]),
             name: JSON.stringify([name]),
             force_parent: 'true',
             _sid: this.sid,
@@ -296,7 +317,10 @@ class SynologyUploader {
 
         if (!response.success) {
             const code = response.error?.code || 'unknown';
-            throw new Error(`Failed to create folder ${name} (error: ${code})`);
+            // Code 1200 means folder already exists
+            if (code != 1200) {
+                throw new Error(`Failed to create folder ${name} in ${parentPath} (error: ${code})`);
+            }
         }
     }
 

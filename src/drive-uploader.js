@@ -80,10 +80,12 @@ class DriveUploader {
     /**
      * الحصول على أو إنشاء مجلد لرقم أمر عمل
      */
-    async getOrCreateFolder(workOrder) {
+    async getOrCreateFolder(workOrder, subFolder = null) {
         await this.ensureInitialized();
 
-        // 1. البحث في قاعدة البيانات أولاً
+        let folderId = null;
+
+        // 1. البحث في قاعدة البيانات أولاً للمجلد الأساسي
         const cachedId = db.getFolder(workOrder);
         if (cachedId) {
             try {
@@ -91,27 +93,56 @@ class DriveUploader {
                     fileId: cachedId,
                     fields: 'id,trashed',
                 });
-                if (!res.data.trashed) return cachedId;
-                this.logger.warning(`Folder ${cachedId} for WO ${workOrder} is trashed, recreating...`);
+                if (!res.data.trashed) {
+                    folderId = cachedId;
+                } else {
+                    this.logger.warning(`Folder ${cachedId} for WO ${workOrder} is trashed, recreating...`);
+                }
             } catch (e) {
                 this.logger.warning(`Cached folder ${cachedId} for WO ${workOrder} inaccessible, searching...`);
             }
         }
 
-        // 2. البحث في Drive
-        const folderId = await this.findFolderByName(workOrder, this.rootFolderId);
-        if (folderId) {
+        // 2. البحث في Drive أو إنشاء المجلد الأساسي
+        if (!folderId) {
+            folderId = await this.findFolderByName(workOrder, this.rootFolderId);
+            if (folderId) {
+                this.logger.info(`Found existing folder for WO ${workOrder}: ${folderId}`);
+            } else {
+                folderId = await this.createFolder(workOrder, this.rootFolderId);
+                this.logger.info(`Created new folder for WO ${workOrder}: ${folderId}`);
+            }
             db.saveFolder(workOrder, folderId);
-            this.logger.info(`Found existing folder for WO ${workOrder}: ${folderId}`);
-            return folderId;
         }
 
-        // 3. إنشاء مجلد جديد
-        const newFolderId = await this.createFolder(workOrder, this.rootFolderId);
-        db.saveFolder(workOrder, newFolderId);
-        this.logger.info(`Created new folder for WO ${workOrder}: ${newFolderId}`);
+        // 3. التعامل مع المجلد الفرعي إن وجد
+        if (subFolder) {
+            const cleanSubFolder = subFolder.replace(/[\\/:*?"<>|]/g, '-').trim() || 'General';
+            let subFolderId = null;
 
-        return newFolderId;
+            const cachedSubId = db.getFolder(workOrder, cleanSubFolder);
+            if (cachedSubId) {
+                try {
+                    const res = await this.drive.files.get({
+                        fileId: cachedSubId,
+                        fields: 'id,trashed',
+                    });
+                    if (!res.data.trashed) subFolderId = cachedSubId;
+                } catch (e) { }
+            }
+
+            if (!subFolderId) {
+                subFolderId = await this.findFolderByName(cleanSubFolder, folderId);
+                if (!subFolderId) {
+                    subFolderId = await this.createFolder(cleanSubFolder, folderId);
+                    this.logger.info(`Created new subfolder for WO ${workOrder}/${cleanSubFolder}: ${subFolderId}`);
+                }
+                db.saveFolder(workOrder, subFolderId, cleanSubFolder);
+            }
+            return subFolderId;
+        }
+
+        return folderId;
     }
 
     /**
