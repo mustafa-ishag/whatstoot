@@ -173,9 +173,17 @@ function renderUploads(uploads) {
             : '<span style="color:var(--text-muted)">—</span>';
 
         const isImage = u.status === 'completed' && u.drive_id;
-        const thumbHtml = isImage
-            ? `<div class="thumb-cell" onclick="openLightbox(${u.id}, '${escapeHtml(u.work_order)}', '${escapeHtml(u.file_name)}')"><img src="/api/image-thumb/${u.id}?size=small" alt="معاينة" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\'thumb-placeholder\'>🖼</span>'"></div>`
-            : '<span class="thumb-placeholder">—</span>';
+        const isVideoFile = isImage && /\.(mp4|3gp|mov|avi|mkv|webm)$/i.test(u.file_name);
+        let thumbHtml;
+        if (isImage) {
+            if (isVideoFile) {
+                thumbHtml = `<div class="thumb-cell thumb-video" onclick="openLightbox(${u.id}, '${escapeHtml(u.work_order)}', '${escapeHtml(u.file_name)}', true)"><div class="thumb-play">▶</div></div>`;
+            } else {
+                thumbHtml = `<div class="thumb-cell" onclick="openLightbox(${u.id}, '${escapeHtml(u.work_order)}', '${escapeHtml(u.file_name)}', false)"><img src="/api/image-thumb/${u.id}?size=small" alt="معاينة" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\'thumb-placeholder\'>🖼</span>'"></div>`;
+            }
+        } else {
+            thumbHtml = '<span class="thumb-placeholder">—</span>';
+        }
 
         return `
             <tr>
@@ -318,29 +326,59 @@ function showToast(message, type = 'info') {
 // Lightbox
 // =============================================
 
-function openLightbox(uploadId, workOrder, fileName) {
+function openLightbox(uploadId, workOrder, fileName, isVideo = false) {
     const overlay = document.getElementById('lightboxOverlay');
     const img = document.getElementById('lightboxImage');
     const spinner = document.getElementById('lightboxSpinner');
     const info = document.getElementById('lightboxInfo');
+    const content = document.querySelector('.lightbox-content');
+
+    // Remove any existing video
+    const existingVideo = document.getElementById('lightboxVideo');
+    if (existingVideo) existingVideo.remove();
 
     // Reset state
-    img.style.opacity = '0';
-    img.src = '';
     spinner.style.display = 'flex';
 
     // Show overlay
     overlay.classList.add('active');
     document.body.style.overflow = 'hidden';
 
-    // Load full image
-    img.src = `/api/image-full/${uploadId}`;
-    info.innerHTML = `<span class="lightbox-wo">أمر عمل: ${escapeHtml(workOrder)}</span> <span class="lightbox-file">${escapeHtml(fileName)}</span>`;
+    if (isVideo) {
+        img.style.display = 'none';
+        const video = document.createElement('video');
+        video.id = 'lightboxVideo';
+        video.controls = true;
+        video.autoplay = true;
+        video.style.maxWidth = '90vw';
+        video.style.maxHeight = '80vh';
+        video.style.borderRadius = 'var(--radius)';
+        video.style.boxShadow = '0 8px 40px rgba(0,0,0,0.5)';
+        video.style.opacity = '0';
+        video.style.transition = 'opacity 0.4s ease';
+        video.src = `/api/image-full/${uploadId}`;
+        video.onloadeddata = () => {
+            spinner.style.display = 'none';
+            video.style.opacity = '1';
+        };
+        video.onerror = () => {
+            spinner.innerHTML = '<span style="color:var(--red)">❌ فشل تحميل الفيديو</span>';
+        };
+        content.insertBefore(video, info);
+    } else {
+        img.style.display = 'block';
+        img.style.opacity = '0';
+        img.src = `/api/image-full/${uploadId}`;
+    }
+
+    const icon = isVideo ? '🎬' : '🖼';
+    info.innerHTML = `<span class="lightbox-wo">أمر عمل: ${escapeHtml(workOrder)}</span> <span class="lightbox-file">${icon} ${escapeHtml(fileName)}</span>`;
 }
 
 function closeLightbox() {
     const overlay = document.getElementById('lightboxOverlay');
     const img = document.getElementById('lightboxImage');
+    const video = document.getElementById('lightboxVideo');
 
     overlay.classList.remove('active');
     document.body.style.overflow = '';
@@ -348,6 +386,11 @@ function closeLightbox() {
     // Cleanup after animation
     setTimeout(() => {
         img.src = '';
+        img.style.display = 'block';
+        if (video) {
+            video.pause();
+            video.remove();
+        }
     }, 300);
 }
 

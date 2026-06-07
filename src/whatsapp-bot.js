@@ -22,6 +22,7 @@ class WhatsAppBot {
         this.stats = {
             messagesReceived: 0,
             imagesProcessed: 0,
+            videosProcessed: 0,
             textProcessed: 0,
             errors: 0,
             startTime: Date.now(),
@@ -155,20 +156,26 @@ class WhatsAppBot {
             // 🖼 معالجة الصور
             // =============================================
             if (msg.hasMedia) {
-                console.log(`\n🖼 صورة وردت من ${senderName} (${senderId}) في ${groupName}`);
-
                 const media = await msg.downloadMedia();
                 if (!media) {
                     console.log('⚠️ فشل تحميل الميديا');
                     return;
                 }
 
-                if (!media.mimetype.startsWith('image/')) {
-                    console.log(`⏩ تم تجاهل ميديا غير صورة: ${media.mimetype}`);
+                const isImage = media.mimetype.startsWith('image/');
+                const isVideo = media.mimetype.startsWith('video/');
+
+                if (!isImage && !isVideo) {
+                    console.log(`⏩ تم تجاهل ميديا غير مدعومة: ${media.mimetype}`);
                     return;
                 }
 
-                this.stats.imagesProcessed++;
+                const mediaIcon = isVideo ? '🎬' : '🖼';
+                const mediaType = isVideo ? 'فيديو' : 'صورة';
+                console.log(`\n${mediaIcon} ${mediaType} ورد من ${senderName} (${senderId}) في ${groupName}`);
+
+                if (isImage) this.stats.imagesProcessed++;
+                if (isVideo) this.stats.videosProcessed++;
 
                 const caption = msg.body || '';
                 let wo = null;
@@ -188,7 +195,7 @@ class WhatsAppBot {
                 }
 
                 const payload = {
-                    type: 'image',
+                    type: isVideo ? 'video' : 'image',
                     image_base64: media.data,
                     mimetype: media.mimetype,
                     caption,
@@ -272,7 +279,7 @@ class WhatsAppBot {
 
         // أمر حالة الطابور: !status
         if (text === '!status') {
-            const queueInfo = `📊 حالة البوت:\n📥 الطابور: ${this.uploadQueue.length} صورة\n⚙️ المعالجة: ${this.isProcessing ? 'نعم' : 'لا'}\n📸 صور معالجة: ${this.stats.imagesProcessed}\n❌ أخطاء: ${this.stats.errors}`;
+            const queueInfo = `📊 حالة البوت:\n📥 الطابور: ${this.uploadQueue.length} ملف\n⚙️ المعالجة: ${this.isProcessing ? 'نعم' : 'لا'}\n📸 صور: ${this.stats.imagesProcessed}\n🎬 فيديوهات: ${this.stats.videosProcessed}\n❌ أخطاء: ${this.stats.errors}`;
             await msg.reply(queueInfo);
             return true;
         }
@@ -401,9 +408,10 @@ class WhatsAppBot {
             if (batch.timer) clearTimeout(batch.timer);
             batch.timer = setTimeout(async () => {
                 try {
+                    const mediaWord = batch.count === 1 ? 'ملف' : 'ملفات';
                     const summary = batch.count === 1
-                        ? `✅ تم رفع صورة واحدة بنجاح\n📁 أمر العمل: ${batch.workOrder}`
-                        : `✅ تم رفع ${batch.count} صورة بنجاح\n📁 أمر العمل: ${batch.workOrder}`;
+                        ? `✅ تم رفع ملف واحد بنجاح\n📁 أمر العمل: ${batch.workOrder}`
+                        : `✅ تم رفع ${batch.count} ${mediaWord} بنجاح\n📁 أمر العمل: ${batch.workOrder}`;
 
                     await this.client.sendMessage(batch.chatId, summary);
                     console.log(`📨 ملخص مُرسل: ${batch.count} صورة لأمر العمل ${batch.workOrder}`);

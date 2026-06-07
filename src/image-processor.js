@@ -67,16 +67,19 @@ class ImageProcessor {
 
         try {
             // 1. فك base64 وحفظ مؤقت
-            const imageData = Buffer.from(image_base64, 'base64');
+            const mediaData = Buffer.from(image_base64, 'base64');
             const ext = this.uploader.getExtensionFromMime(mimetype || 'image/jpeg');
-            const tempName = `img_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+            const isVideo = (mimetype || '').startsWith('video/');
+            const prefix = isVideo ? 'vid' : 'img';
+            const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
             const tempPath = path.join(config.TEMP_PATH, tempName);
-            fs.writeFileSync(tempPath, imageData);
+            fs.writeFileSync(tempPath, mediaData);
 
-            this.logger.info(`Saved temp image: ${tempName} (${imageData.length} bytes)`);
+            const mediaType = isVideo ? 'video' : 'image';
+            this.logger.info(`Saved temp ${mediaType}: ${tempName} (${mediaData.length} bytes)`);
 
             // 2. حساب hash وفحص التكرار
-            const hash = this.checker.hashData(imageData);
+            const hash = this.checker.hashData(mediaData);
 
             // 3. تحديد رقم أمر العمل
             let workOrder = inputWO || '';
@@ -107,14 +110,14 @@ class ImageProcessor {
                     group_id, group_name, sender, caption,
                     status: 'duplicate',
                 });
-                this.logger.warning(`Duplicate image skipped for WO ${workOrder}`);
+                this.logger.warning(`Duplicate ${mediaType} skipped for WO ${workOrder}`);
 
                 return {
                     success: true,
                     action: 'skipped',
                     reason: 'duplicate',
                     work_order: workOrder,
-                    message: `⚠️ الصورة مكررة — تم تخطيها (أمر العمل: ${workOrder})`,
+                    message: `⚠️ ${isVideo ? 'الفيديو' : 'الصورة'} مكررة — تم تخطيها (أمر العمل: ${workOrder})`,
                 };
             }
 
@@ -126,13 +129,13 @@ class ImageProcessor {
                     group_id, group_name, sender, caption,
                 });
 
-                this.logger.info(`Image queued (ID: ${queueId}), waiting for work order number...`);
+                this.logger.info(`${isVideo ? 'Video' : 'Image'} queued (ID: ${queueId}), waiting for work order number...`);
 
                 return {
                     success: true,
                     action: 'queued',
                     queue_id: queueId,
-                    message: '⏳ تم استلام الصورة — بانتظار رقم أمر العمل...',
+                    message: `⏳ تم استلام ${isVideo ? 'الفيديو' : 'الصورة'} — بانتظار رقم أمر العمل...`,
                 };
             }
 
@@ -166,7 +169,8 @@ class ImageProcessor {
                 drive_id: result.id,
                 drive_url: result.url,
                 upload_id: uploadId,
-                message: `✅ تم رفع الصورة بنجاح\n📁 أمر العمل: ${workOrder}\n📄 الملف: ${fileName}`,
+                media_type: isVideo ? 'video' : 'image',
+                message: `✅ تم رفع ${isVideo ? 'الفيديو' : 'الصورة'} بنجاح\n📁 أمر العمل: ${workOrder}\n📄 الملف: ${fileName}`,
             };
 
         } catch (e) {
