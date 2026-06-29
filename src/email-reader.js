@@ -101,7 +101,15 @@ class EmailReader {
                 user: config.EMAIL_USER,
                 pass: config.EMAIL_PASS,
             },
-            logger: false, // إخفاء سجلات IMAP المفصلة
+            tls: {
+                rejectUnauthorized: false, // قبول شهادات SSL الذاتية
+            },
+            logger: {
+                debug: () => {},
+                info: (msg) => console.log(`📧 IMAP: ${msg.msg}`),
+                warn: (msg) => console.warn(`📧 IMAP ⚠️: ${msg.msg}`),
+                error: (msg) => console.error(`📧 IMAP ❌: ${msg.msg}`),
+            },
         });
 
         try {
@@ -143,10 +151,14 @@ class EmailReader {
             this.stats.lastCheck = new Date().toISOString();
 
         } catch (err) {
-            console.error('❌ خطأ في اتصال IMAP:', err.message);
-            this.logger.error(`IMAP connection error: ${err.message}`);
+            const detail = err.responseText || err.responseStatus || err.code || '';
+            console.error(`❌ خطأ في اتصال IMAP: ${err.message}`);
+            if (detail) console.error(`   📋 التفاصيل: ${detail}`);
+            console.error(`   🔧 Host: ${config.EMAIL_IMAP_HOST}:${config.EMAIL_IMAP_PORT}`);
+            console.error(`   👤 User: ${config.EMAIL_USER}`);
+            this.logger.error(`IMAP error: ${err.message} | ${detail} | Host: ${config.EMAIL_IMAP_HOST}`);
             this.stats.errors++;
-            this.stats.lastError = err.message;
+            this.stats.lastError = `${err.message} ${detail}`.trim();
             throw err;
         } finally {
             try {
