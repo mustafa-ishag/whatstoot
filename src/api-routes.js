@@ -100,7 +100,7 @@ function register(app, bot, uploader, logger, emailReader) {
                 return res.status(400).json({ success: false, message: 'key and value required' });
             }
 
-            const allowedKeys = ['bot_enabled', 'auto_reply', 'monitor_groups', 'await_timeout', 'email_whatsapp_target'];
+            const allowedKeys = ['bot_enabled', 'auto_reply', 'monitor_groups', 'await_timeout'];
             if (!allowedKeys.includes(key)) {
                 return res.status(400).json({ success: false, message: 'Invalid setting key' });
             }
