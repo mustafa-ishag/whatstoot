@@ -175,6 +175,14 @@ class EmailReader {
     async _processEmail(client, uid) {
         // جلب محتوى الرسالة
         const download = await client.download(uid, undefined, { uid: true });
+        
+        // تعليم الرسالة كمقروءة مبكراً جداً لمنع تكرار الإرسال في حال حدوث تأخير أو خطأ في واتساب
+        try {
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+        } catch (e) {
+            console.error('📧 ⚠️ خطأ أثناء تعليم الرسالة كمقروءة:', e.message);
+        }
+
         const parsed = await simpleParser(download.content);
 
         const subject = parsed.subject || 'بدون موضوع';
@@ -198,8 +206,6 @@ class EmailReader {
         const attachments = parsed.attachments || [];
         if (attachments.length === 0) {
             console.log('📧 ⏩ لا توجد مرفقات — تخطي');
-            // تعليم كمقروءة حتى لو لا مرفقات
-            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
             return;
         }
 
@@ -262,9 +268,7 @@ class EmailReader {
             console.log('📧 ⚠️ لا توجد ملفات PDF للإرسال');
         }
 
-        // 4. تعليم الرسالة كمقروءة
-        await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-        console.log('📧 ✅ تم تعليم الرسالة كمقروءة');
+        // 4. (تم تعليم الرسالة كمقروءة مسبقاً)
 
         // 5. حذف الملفات المؤقتة
         for (const file of pdfFilesToSend) {
