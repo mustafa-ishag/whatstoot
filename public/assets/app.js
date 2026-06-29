@@ -306,20 +306,125 @@ function escapeHtml(text) {
 // =============================================
 // Toast Notifications
 // =============================================
-
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
+    toast.className = `toast toast-${type}`;
     toast.textContent = message;
 
     container.appendChild(toast);
 
-    // Auto remove after 4 seconds
     setTimeout(() => {
-        toast.classList.add('toast-exit');
+        toast.style.animation = 'slideOutRight 0.3s forwards';
         setTimeout(() => toast.remove(), 300);
     }, 4000);
+}
+
+// =============================================
+// Settings Modal Logic
+// =============================================
+
+async function openSettingsModal() {
+    document.getElementById('settingsModal').style.display = 'flex';
+    
+    // Fetch current settings
+    try {
+        const res = await fetch(`${API_BASE}/settings`);
+        const data = await res.json();
+        
+        let currentTarget = '';
+        if (data.success && data.settings && data.settings.email_whatsapp_target) {
+            currentTarget = data.settings.email_whatsapp_target;
+        }
+
+        // Fetch groups
+        const groupsRes = await fetch(`${API_BASE}/groups`);
+        const groupsData = await groupsRes.json();
+        
+        const groupSelect = document.getElementById('emailTargetGroup');
+        groupSelect.innerHTML = '<option value="">-- اختر مجموعة --</option>';
+        
+        if (groupsData.success && groupsData.groups) {
+            groupsData.groups.forEach(g => {
+                const option = document.createElement('option');
+                option.value = g.id;
+                option.textContent = g.name;
+                groupSelect.appendChild(option);
+            });
+        } else {
+            groupSelect.innerHTML = '<option value="">لم يتم العثور على مجموعات أو البوت غير متصل</option>';
+        }
+
+        // Set initial values
+        if (currentTarget.includes('@g.us')) {
+            // It's a group
+            document.querySelector('input[name="emailTargetType"][value="group"]').checked = true;
+            toggleEmailTargetType();
+            groupSelect.value = currentTarget;
+        } else {
+            // It's a number
+            document.querySelector('input[name="emailTargetType"][value="number"]').checked = true;
+            toggleEmailTargetType();
+            document.getElementById('emailTargetNumber').value = currentTarget;
+        }
+        
+    } catch (e) {
+        showToast('خطأ في تحميل الإعدادات', 'error');
+        console.error(e);
+    }
+}
+
+function closeSettingsModal() {
+    document.getElementById('settingsModal').style.display = 'none';
+}
+
+function toggleEmailTargetType() {
+    const type = document.querySelector('input[name="emailTargetType"]:checked').value;
+    if (type === 'number') {
+        document.getElementById('emailTargetNumberContainer').style.display = 'block';
+        document.getElementById('emailTargetGroupContainer').style.display = 'none';
+    } else {
+        document.getElementById('emailTargetNumberContainer').style.display = 'none';
+        document.getElementById('emailTargetGroupContainer').style.display = 'block';
+    }
+}
+
+async function saveSettings() {
+    const type = document.querySelector('input[name="emailTargetType"]:checked').value;
+    let target = '';
+    
+    if (type === 'number') {
+        target = document.getElementById('emailTargetNumber').value.trim();
+        if (!target) {
+            showToast('الرجاء إدخال رقم الهاتف', 'error');
+            return;
+        }
+    } else {
+        target = document.getElementById('emailTargetGroup').value;
+        if (!target) {
+            showToast('الرجاء اختيار مجموعة', 'error');
+            return;
+        }
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'email_whatsapp_target', value: target })
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+            showToast('تم حفظ الإعدادات بنجاح', 'success');
+            closeSettingsModal();
+        } else {
+            showToast(data.message || 'فشل حفظ الإعدادات', 'error');
+        }
+    } catch (e) {
+        showToast('خطأ في الاتصال بالخادم', 'error');
+        console.error(e);
+    }
 }
 
 // =============================================
