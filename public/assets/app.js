@@ -85,7 +85,9 @@ async function loadUploads() {
     }
 }
 
-let wasDisconnected = false; // track state changes
+let wasDisconnected = false;
+let lastBotState = null; // 'connected' | 'qr' | 'offline'
+let lastQrData = null;   // cache last QR to avoid flickering
 
 async function loadBotStatus() {
     try {
@@ -96,80 +98,80 @@ async function loadBotStatus() {
         const dot = badge.querySelector('.status-dot');
         const text = badge.querySelector('.status-text');
 
-        // Banner elements
-        const bannerConnected = document.getElementById('waBannerConnected');
-        const bannerQR = document.getElementById('waBannerQR');
-        const bannerOffline = document.getElementById('waBannerOffline');
-
-        // Hide all banners first
-        bannerConnected.style.display = 'none';
-        bannerQR.style.display = 'none';
-        bannerOffline.style.display = 'none';
+        let newState = 'offline';
 
         if (data.success && data.whatsapp_ready) {
-            // ✅ متصل
-            dot.className = 'status-dot online';
-            text.textContent = 'متصل';
-            bannerConnected.style.display = 'flex';
+            newState = 'connected';
+        } else if (data.success && data.has_qr) {
+            newState = 'qr';
+        }
 
-            // إذا كان غير متصل سابقاً، أظهر إشعار نجاح
-            if (wasDisconnected) {
-                showToast('✅ تم الاتصال بواتساب بنجاح!', 'success');
-                wasDisconnected = false;
+        // تحديث البانرات فقط عند تغيّر الحالة
+        if (newState !== lastBotState) {
+            document.getElementById('waBannerConnected').style.display = 'none';
+            document.getElementById('waBannerQR').style.display = 'none';
+            document.getElementById('waBannerOffline').style.display = 'none';
+
+            if (newState === 'connected') {
+                dot.className = 'status-dot online';
+                text.textContent = 'متصل';
+                document.getElementById('waBannerConnected').style.display = 'flex';
+
+                if (wasDisconnected) {
+                    showToast('✅ تم الاتصال بواتساب بنجاح!', 'success');
+                    wasDisconnected = false;
+                }
+                setTimeout(() => {
+                    document.getElementById('waBannerConnected').style.display = 'none';
+                }, 5000);
+
+                setRefreshSpeed('normal');
+                lastQrData = null;
+
+            } else if (newState === 'qr') {
+                dot.className = 'status-dot offline';
+                text.textContent = 'بانتظار QR';
+                document.getElementById('waBannerQR').style.display = 'block';
+                wasDisconnected = true;
+                setRefreshSpeed('fast');
+
+            } else {
+                dot.className = 'status-dot offline';
+                text.textContent = 'غير متصل';
+                document.getElementById('waBannerOffline').style.display = 'flex';
+                wasDisconnected = true;
+                setRefreshSpeed('fast');
             }
 
-            // إخفاء بانر النجاح بعد 5 ثوانٍ
-            setTimeout(() => {
-                bannerConnected.style.display = 'none';
-            }, 5000);
+            lastBotState = newState;
+        }
 
-            // إعادة سرعة التحديث للعادية
-            setRefreshSpeed('normal');
-
-        } else if (data.success && data.has_qr) {
-            // 📱 بانتظار QR
-            dot.className = 'status-dot offline';
-            text.textContent = 'بانتظار QR';
-            wasDisconnected = true;
-
-            // جلب صورة QR
+        // جلب QR فقط عند الحاجة — وتحديث الصورة فقط إذا تغيّرت البيانات
+        if (newState === 'qr') {
             try {
                 const qrRes = await fetch(`${API_BASE}/qr`);
                 const qrData = await qrRes.json();
-
-                if (qrData.success && qrData.qr) {
+                if (qrData.success && qrData.qr && qrData.qr !== lastQrData) {
                     document.getElementById('waQrImage').src = qrData.qr;
-                    bannerQR.style.display = 'block';
+                    lastQrData = qrData.qr;
                 }
             } catch (e) {
                 console.error('QR fetch error:', e);
             }
+        }
 
-            // تسريع التحديث لجلب QR الجديد بسرعة
-            setRefreshSpeed('fast');
-
-        } else {
-            // ❌ غير متصل
-            dot.className = 'status-dot offline';
-            text.textContent = 'غير متصل';
-            bannerOffline.style.display = 'flex';
+    } catch (e) {
+        if (lastBotState !== 'error') {
+            const badge = document.getElementById('botStatusBadge');
+            badge.querySelector('.status-dot').className = 'status-dot offline';
+            badge.querySelector('.status-text').textContent = 'غير متصل';
+            document.getElementById('waBannerConnected').style.display = 'none';
+            document.getElementById('waBannerQR').style.display = 'none';
+            document.getElementById('waBannerOffline').style.display = 'flex';
             wasDisconnected = true;
-
-            // تسريع التحديث
+            lastBotState = 'error';
             setRefreshSpeed('fast');
         }
-    } catch (e) {
-        const badge = document.getElementById('botStatusBadge');
-        const dot = badge.querySelector('.status-dot');
-        const text = badge.querySelector('.status-text');
-        dot.className = 'status-dot offline';
-        text.textContent = 'غير متصل';
-
-        document.getElementById('waBannerConnected').style.display = 'none';
-        document.getElementById('waBannerQR').style.display = 'none';
-        document.getElementById('waBannerOffline').style.display = 'flex';
-        wasDisconnected = true;
-        setRefreshSpeed('fast');
     }
 }
 
@@ -182,6 +184,25 @@ function setRefreshSpeed(speed) {
     clearInterval(refreshTimer);
     const interval = speed === 'fast' ? 3000 : REFRESH_INTERVAL;
     refreshTimer = setInterval(refreshData, interval);
+}
+
+// ── Disconnect WhatsApp ──
+async function disconnectWhatsApp() {
+    if (!confirm('هل أنت متأكد من قطع اتصال واتساب؟\nسيتم إنشاء QR Code جديد لإعادة الربط.')) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/disconnect`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showToast('🔌 تم قطع الاتصال بنجاح', 'success');
+            lastBotState = null; // force re-render
+            loadBotStatus();
+        } else {
+            showToast(data.message || 'فشل قطع الاتصال', 'error');
+        }
+    } catch (e) {
+        showToast('خطأ في الاتصال بالخادم', 'error');
+    }
 }
 
 async function loadLogs() {

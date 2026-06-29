@@ -881,6 +881,25 @@ tbody tr:last-child td {
     animation: fadeInBanner 0.5s ease;
 }
 
+.wa-disconnect-btn {
+    margin-right: auto;
+    padding: 5px 14px;
+    border-radius: 6px;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--red);
+    font-family: var(--font);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.wa-disconnect-btn:hover {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: var(--red);
+}
+
 .wa-banner-qr {
     margin-top: 12px;
     background: linear-gradient(135deg, rgba(255, 165, 0, 0.08), rgba(255, 140, 0, 0.04));

@@ -267,6 +267,26 @@ function register(app, bot, uploader, logger, emailReader) {
     });
 
     // =============================================
+    // 🔌 قطع اتصال واتساب
+    // POST /api/disconnect
+    // =============================================
+    app.post('/api/disconnect', async (req, res) => {
+        try {
+            if (!bot.isClientReady) {
+                return res.json({ success: false, message: 'واتساب غير متصل أصلاً' });
+            }
+
+            console.log('🔌 طلب قطع اتصال واتساب من لوحة التحكم...');
+            await bot.client.logout();
+            bot.isClientReady = false;
+
+            res.json({ success: true, message: 'تم قطع اتصال واتساب بنجاح. سيظهر QR Code جديد قريباً.' });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
     // 📋 قائمة المجموعات
     // GET /api/groups  أو  GET /groups
     // =============================================
