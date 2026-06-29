@@ -11,7 +11,7 @@ const { PDFDocument } = require('pdf-lib');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-
+const db = require('./database');
 class EmailReader {
     constructor(bot, logger) {
         this.bot = bot;
@@ -340,12 +340,18 @@ class EmailReader {
      * إرسال ملفات PDF عبر واتساب
      */
     async _sendPdfsViaWhatsApp(pdfFiles, workOrder, subject) {
-        // تنسيق رقم الواتساب
-        let number = this.whatsappNumber.replace(/[^0-9]/g, '');
-        if (number.startsWith('05')) {
-            number = '966' + number.substring(1);
+        // تحديد جهة الإرسال (مجموعة أو رقم)
+        let target = db.getSetting('email_whatsapp_target') || this.whatsappNumber;
+        let chatId = target;
+
+        if (!target.includes('@g.us')) {
+            // تنسيق رقم الواتساب إذا لم يكن مجموعة
+            let number = target.replace(/[^0-9]/g, '');
+            if (number.startsWith('05')) {
+                number = '966' + number.substring(1);
+            }
+            chatId = `${number}@c.us`;
         }
-        const chatId = `${number}@c.us`;
 
         // إرسال رسالة تعريفية
         const intro = workOrder
@@ -354,7 +360,7 @@ class EmailReader {
 
         try {
             await this.bot.client.sendMessage(chatId, intro);
-            console.log(`📧 📨 رسالة تعريفية مُرسلة إلى ${this.whatsappNumber}`);
+            console.log(`📧 📨 رسالة تعريفية مُرسلة إلى ${target}`);
         } catch (err) {
             console.error('📧 ❌ خطأ إرسال رسالة تعريفية:', err.message);
         }
@@ -391,7 +397,7 @@ class EmailReader {
             }
         }
 
-        this.logger.info(`Sent ${pdfFiles.length} PDF(s) for WO ${workOrder || 'N/A'} to ${this.whatsappNumber}`);
+        this.logger.info(`Sent ${pdfFiles.length} PDF(s) for WO ${workOrder || 'N/A'} to ${target}`);
     }
 
     /**
@@ -436,7 +442,7 @@ class EmailReader {
         return {
             enabled: config.EMAIL_ENABLED,
             running: this.isRunning,
-            target_number: this.whatsappNumber,
+            target_number: db.getSetting('email_whatsapp_target') || this.whatsappNumber,
             email_account: config.EMAIL_USER,
             imap_host: config.EMAIL_IMAP_HOST,
             check_interval: config.EMAIL_CHECK_INTERVAL,
