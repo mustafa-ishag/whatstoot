@@ -87,7 +87,13 @@ const WhatsAppBot = require('./src/whatsapp-bot');
 const bot = new WhatsAppBot(imageProcessor, logger);
 
 // =============================================
-// 7. تسجيل API Routes
+// 7. تهيئة قارئ البريد الإلكتروني
+// =============================================
+const EmailReader = require('./src/email-reader');
+const emailReader = new EmailReader(bot, logger);
+
+// =============================================
+// 8. تسجيل API Routes
 // =============================================
 const apiRoutes = require('./src/api-routes');
 apiRoutes.register(app, bot, uploader, logger, emailReader);
@@ -98,18 +104,12 @@ app.get('/', (req, res) => {
 });
 
 // =============================================
-// 8. تشغيل Queue Worker
+// 9. تشغيل Queue Worker
 // =============================================
 const QueueWorker = require('./src/queue-worker');
 const worker = new QueueWorker(uploader, logger, (chatId, message) => {
     return bot.sendMessage(chatId, message);
 });
-
-// =============================================
-// 8.5 تهيئة قارئ البريد الإلكتروني
-// =============================================
-const EmailReader = require('./src/email-reader');
-const emailReader = new EmailReader(bot, logger);
 
 // =============================================
 // 9. بدء التشغيل
