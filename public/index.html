@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/style.css?v=6">
+    <link rel="stylesheet" href="assets/style.css?v=7">
 </head>
 <body>
 
@@ -27,6 +27,7 @@
                 </div>
             </div>
             <div class="header-actions">
+                <button class="btn btn-sm" onclick="disconnectWhatsApp()" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold; margin-left: 10px;">🔌 إعادة ربط واتساب</button>
                 <button class="btn btn-sm" onclick="openSettingsModal()" style="background: rgba(35, 83, 164, 0.15); color: #2353a4; border: 1px solid rgba(35, 83, 164, 0.3); padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold; margin-left: 10px;">⚙️ الإعدادات</button>
                 <a href="/api/test-storage" class="btn btn-sm" style="background: rgba(42, 204, 125, 0.15); color: #2acc7d; border: 1px solid rgba(42, 204, 125, 0.3); text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: bold; margin-left: 10px;" target="_blank">🔍 فحص الاتصال</a>
                 <div class="bot-status" id="botStatusBadge">
@@ -284,6 +285,6 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="assets/app.js?v=6"></script>
+    <script src="assets/app.js?v=7"></script>
 </body>
 </html>
