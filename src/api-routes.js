@@ -21,7 +21,7 @@ const config = require('./config');
  * @param {*} uploader
  * @param {import('./logger')} logger
  */
-function register(app, bot, uploader, logger) {
+function register(app, bot, uploader, logger, emailReader) {
 
     // =============================================
     // 📊 إحصائيات
@@ -411,6 +411,37 @@ function register(app, bot, uploader, logger) {
         } catch (e) {
             logger.warning(`Image proxy error: ${e.message}`);
             res.status(500).send('Could not load image');
+        }
+    });
+
+    // =============================================
+    // 📧 حالة قارئ البريد الإلكتروني
+    // GET /api/email-status
+    // =============================================
+    app.get('/api/email-status', (req, res) => {
+        try {
+            if (!emailReader) {
+                return res.json({ success: false, message: 'Email reader not initialized' });
+            }
+            res.json({ success: true, ...emailReader.getStatus() });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
+    // 📧 فحص البريد يدوياً
+    // POST /api/check-email
+    // =============================================
+    app.post('/api/check-email', async (req, res) => {
+        try {
+            if (!emailReader) {
+                return res.json({ success: false, message: 'Email reader not initialized' });
+            }
+            await emailReader.checkEmails();
+            res.json({ success: true, message: 'تم فحص البريد بنجاح', stats: emailReader.stats });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
         }
     });
 }

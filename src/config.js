@@ -75,6 +75,17 @@ const MONITORED_GROUPS = MONITORED_GROUPS_RAW === 'all'
     ? 'all' 
     : MONITORED_GROUPS_RAW.split(',').map(g => g.trim());
 
+// =============================================
+// Email Reader Settings
+// =============================================
+const EMAIL_IMAP_HOST = env('EMAIL_IMAP_HOST', 'mail.toot-t.com');
+const EMAIL_IMAP_PORT = envInt('EMAIL_IMAP_PORT', 993);
+const EMAIL_USER = env('EMAIL_USER', '');
+const EMAIL_PASS = env('EMAIL_PASS', '');
+const EMAIL_CHECK_INTERVAL = envInt('EMAIL_CHECK_INTERVAL', 60);
+const EMAIL_WHATSAPP_NUMBER = env('EMAIL_WHATSAPP_NUMBER', '0537266407');
+const EMAIL_ENABLED = envBool('EMAIL_ENABLED', false);
+
 module.exports = {
     // Paths
     BASE_PATH, STORAGE_PATH, TEMP_PATH, LOGS_PATH, DB_PATH, CREDENTIALS_PATH,
@@ -90,4 +101,7 @@ module.exports = {
     PORT, API_KEY,
     // Groups
     MONITORED_GROUPS,
+    // Email
+    EMAIL_IMAP_HOST, EMAIL_IMAP_PORT, EMAIL_USER, EMAIL_PASS,
+    EMAIL_CHECK_INTERVAL, EMAIL_WHATSAPP_NUMBER, EMAIL_ENABLED,
 };

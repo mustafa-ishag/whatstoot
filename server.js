@@ -90,7 +90,7 @@ const bot = new WhatsAppBot(imageProcessor, logger);
 // 7. تسجيل API Routes
 // =============================================
 const apiRoutes = require('./src/api-routes');
-apiRoutes.register(app, bot, uploader, logger);
+apiRoutes.register(app, bot, uploader, logger, emailReader);
 
 // Dashboard route (fallback)
 app.get('/', (req, res) => {
@@ -104,6 +104,12 @@ const QueueWorker = require('./src/queue-worker');
 const worker = new QueueWorker(uploader, logger, (chatId, message) => {
     return bot.sendMessage(chatId, message);
 });
+
+// =============================================
+// 8.5 تهيئة قارئ البريد الإلكتروني
+// =============================================
+const EmailReader = require('./src/email-reader');
+const emailReader = new EmailReader(bot, logger);
 
 // =============================================
 // 9. بدء التشغيل
@@ -129,6 +135,8 @@ app.listen(config.PORT, () => {
     console.log(`   POST /api/send-message   — إرسال رسالة`);
     console.log(`   GET  /api/logs           — سجل الأحداث`);
     console.log(`   GET  /api/test-storage   — اختبار التخزين`);
+    console.log(`   GET  /api/email-status   — حالة قارئ البريد`);
+    console.log(`   POST /api/check-email    — فحص البريد يدوياً`);
     console.log('');
 
     // بدء WhatsApp Bot
@@ -139,6 +147,16 @@ app.listen(config.PORT, () => {
     setTimeout(() => {
         worker.start(5000);
     }, 3000);
+
+    // بدء قارئ البريد (بعد 10 ثوان — ليعطي واتساب وقتاً للاتصال)
+    if (config.EMAIL_ENABLED) {
+        setTimeout(() => {
+            console.log('📧 جاري تفعيل قارئ البريد الإلكتروني...');
+            emailReader.start();
+        }, 10000);
+    } else {
+        console.log('📧 قارئ البريد معطّل (EMAIL_ENABLED=false)');
+    }
 });
 
 // =============================================
@@ -147,6 +165,7 @@ app.listen(config.PORT, () => {
 process.on('SIGINT', async () => {
     console.log('\n⏹️ إيقاف البوت...');
     worker.stop();
+    emailReader.stop();
     logger.info('Bot shutting down');
     process.exit(0);
 });
@@ -154,6 +173,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
     console.log('\n⏹️ إيقاف البوت...');
     worker.stop();
+    emailReader.stop();
     logger.info('Bot shutting down');
     process.exit(0);
 });
