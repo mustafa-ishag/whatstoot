@@ -273,30 +273,36 @@ function register(app, bot, uploader, logger, emailReader) {
     // =============================================
     app.post('/api/disconnect', async (req, res) => {
         try {
-            if (!bot.isClientReady) {
-                return res.json({ success: false, message: 'واتساب غير متصل أصلاً' });
-            }
-
             console.log('🔌 طلب قطع اتصال واتساب من لوحة التحكم...');
             bot.isClientReady = false;
+            bot.manualDisconnect = true; // لمنع إعادة الاتصال التلقائي
 
-            // تدمير العميل بالكامل (بدلاً من logout الذي يفسد الجلسة)
+            // إرسال الرد فوراً للواجهة لكي لا تنتظر طويلاً
+            res.json({ success: true, message: 'جاري إعادة تهيئة النظام... سيظهر الباركود الجديد خلال 15 ثانية.' });
+
+            // تدمير العميل لإغلاق متصفح Chromium
             try { await bot.client.destroy(); } catch (e) { /* ignore */ }
 
             // مسح ملفات الجلسة القديمة لضمان QR جديد نظيف
             const sessionPath = path.join(config.BASE_PATH, '.wwebjs_auth');
             const fs = require('fs');
-            if (fs.existsSync(sessionPath)) {
-                fs.rmSync(sessionPath, { recursive: true, force: true });
-                console.log('🗑️ تم مسح ملفات الجلسة القديمة');
-            }
+            
+            setTimeout(() => {
+                try {
+                    if (fs.existsSync(sessionPath)) {
+                        fs.rmSync(sessionPath, { recursive: true, force: true });
+                        console.log('🗑️ تم مسح ملفات الجلسة القديمة بنجاح');
+                    }
+                } catch (err) {
+                    console.error('⚠️ لم نتمكن من مسح الجلسة (قد تكون مقفلة):', err.message);
+                }
 
-            // إعادة إنشاء العميل من جديد
-            bot.recreateClient();
-            bot.client.initialize();
+                console.log('🔄 إعادة تشغيل العملية للحصول على جلسة نظيفة 100%...');
+                process.exit(0); // systemd سيقوم بإعادة التشغيل تلقائياً
+            }, 2000);
 
-            res.json({ success: true, message: 'تم قطع الاتصال. QR Code جديد سيظهر خلال ثوانٍ.' });
         } catch (e) {
+            console.error(e);
             res.status(500).json({ success: false, message: e.message });
         }
     });

@@ -105,6 +105,12 @@ class WhatsAppBot {
         this.client.on('disconnected', (reason) => {
             this.isClientReady = false;
             console.log('⚠️ تم قطع الاتصال:', reason);
+            
+            if (this.manualDisconnect) {
+                console.log('🛑 قطع اتصال يدوي — لن يتم محاولة إعادة الاتصال هنا.');
+                return;
+            }
+
             console.log('🔄 جاري محاولة إعادة الاتصال خلال 5 ثوانٍ...');
             setTimeout(() => {
                 try {
