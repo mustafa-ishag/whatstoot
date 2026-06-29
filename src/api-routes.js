@@ -11,6 +11,7 @@
  */
 
 const express = require('express');
+const path = require('path');
 const db = require('./database');
 const config = require('./config');
 const QRCode = require('qrcode');
@@ -277,10 +278,24 @@ function register(app, bot, uploader, logger, emailReader) {
             }
 
             console.log('🔌 طلب قطع اتصال واتساب من لوحة التحكم...');
-            await bot.client.logout();
             bot.isClientReady = false;
 
-            res.json({ success: true, message: 'تم قطع اتصال واتساب بنجاح. سيظهر QR Code جديد قريباً.' });
+            // تدمير العميل بالكامل (بدلاً من logout الذي يفسد الجلسة)
+            try { await bot.client.destroy(); } catch (e) { /* ignore */ }
+
+            // مسح ملفات الجلسة القديمة لضمان QR جديد نظيف
+            const sessionPath = path.join(config.BASE_PATH, '.wwebjs_auth');
+            const fs = require('fs');
+            if (fs.existsSync(sessionPath)) {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+                console.log('🗑️ تم مسح ملفات الجلسة القديمة');
+            }
+
+            // إعادة إنشاء العميل من جديد
+            bot.recreateClient();
+            bot.client.initialize();
+
+            res.json({ success: true, message: 'تم قطع الاتصال. QR Code جديد سيظهر خلال ثوانٍ.' });
         } catch (e) {
             res.status(500).json({ success: false, message: e.message });
         }

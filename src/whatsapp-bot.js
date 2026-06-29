@@ -126,6 +126,35 @@ class WhatsAppBot {
     }
 
     /**
+     * إعادة إنشاء عميل واتساب من جديد (بعد قطع الاتصال)
+     */
+    recreateClient() {
+        this.client = new Client({
+            authStrategy: new LocalAuth({
+                dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
+            }),
+            puppeteer: {
+                headless: true,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu',
+                    '--disable-crash-reporter',
+                ],
+            },
+        });
+
+        this.isClientReady = false;
+        this.qrCodeData = null;
+        this._setupEvents();
+        console.log('🔄 تم إنشاء عميل واتساب جديد');
+    }
+
+    /**
      * إرسال رسالة (يُستخدم من QueueWorker)
      */
     async sendMessage(chatId, message) {
