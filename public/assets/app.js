@@ -325,7 +325,7 @@ function showToast(message, type = 'info') {
 // =============================================
 
 async function openSettingsModal() {
-    document.getElementById('settingsModal').style.display = 'flex';
+    document.getElementById('settingsModal').classList.add('active');
     
     // Fetch current settings
     try {
@@ -375,7 +375,7 @@ async function openSettingsModal() {
 }
 
 function closeSettingsModal() {
-    document.getElementById('settingsModal').style.display = 'none';
+    document.getElementById('settingsModal').classList.remove('active');
 }
 
 function toggleEmailTargetType() {
