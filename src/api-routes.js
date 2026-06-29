@@ -277,35 +277,20 @@ function register(app, bot, uploader, logger, emailReader) {
             bot.isClientReady = false;
             bot.manualDisconnect = true;
 
-            res.json({ success: true, message: 'جاري إعادة تهيئة النظام... سيظهر الباركود الجديد خلال 15 ثانية.' });
+            // كتابة علامة مسح الجلسة — سيتم مسحها عند إعادة التشغيل
+            const fs = require('fs');
+            const flagPath = path.join(config.BASE_PATH, '.clear_session');
+            fs.writeFileSync(flagPath, new Date().toISOString());
+            console.log('📝 تم كتابة علامة مسح الجلسة');
 
-            const sessionPath = path.join(config.BASE_PATH, '.wwebjs_auth');
-            
-            // 🚨 الجدولة للإغلاق الإجباري بعد 3 ثوانٍ بغض النظر عما يحدث
+            res.json({ success: true, message: 'جاري إعادة تشغيل النظام... الباركود سيظهر خلال 15 ثانية.' });
+
+            // إغلاق العملية بعد ثانية واحدة — systemd سيعيد التشغيل
+            // وعند التشغيل server.js سيجد العلامة ويمسح الجلسة قبل تهيئة واتساب
             setTimeout(() => {
-                const fs = require('fs');
-                try {
-                    if (fs.existsSync(sessionPath)) {
-                        fs.rmSync(sessionPath, { recursive: true, force: true });
-                        console.log('🗑️ تم مسح الجلسة (الطريقة العادية)');
-                    }
-                } catch (err) {
-                    // إذا فشل بسبب قفل الملفات، نستخدم أمر shell قوي
-                    try {
-                        require('child_process').execSync(`rm -rf "${sessionPath}"`);
-                        console.log('🗑️ تم مسح الجلسة (أمر rm -rf)');
-                    } catch(e) {}
-                }
-
-                console.log('🔄 إعادة تشغيل العملية للحصول على جلسة نظيفة 100%...');
-                process.exit(0); 
-            }, 3000);
-
-            // محاولة تدمير العميل وإغلاق المتصفح (بدون await مباشر لمنع التعليق)
-            Promise.race([
-                bot.client.destroy(),
-                new Promise(r => setTimeout(r, 2000))
-            ]).catch(() => {});
+                console.log('🔄 إعادة تشغيل العملية...');
+                process.exit(0);
+            }, 1000);
 
         } catch (e) {
             console.error(e);

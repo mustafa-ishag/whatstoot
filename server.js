@@ -25,6 +25,32 @@ console.log('╚═════════════════════�
 console.log('');
 
 // =============================================
+// تنظيف الجلسة عند الطلب (flag file من disconnect API)
+// =============================================
+const clearFlagPath = path.join(config.BASE_PATH, '.clear_session');
+const sessionAuthPath = path.join(config.BASE_PATH, '.wwebjs_auth');
+
+if (fs.existsSync(clearFlagPath)) {
+    console.log('🗑️ وُجدت علامة مسح الجلسة — جاري مسح الجلسة القديمة...');
+    try {
+        if (fs.existsSync(sessionAuthPath)) {
+            fs.rmSync(sessionAuthPath, { recursive: true, force: true });
+            console.log('🗑️ ✅ تم مسح ملفات الجلسة القديمة بنجاح');
+        }
+    } catch (err) {
+        console.error('🗑️ ⚠️ فشل المسح العادي، جاري المحاولة بأمر rm -rf...');
+        try {
+            require('child_process').execSync(`rm -rf "${sessionAuthPath}"`);
+            console.log('🗑️ ✅ تم مسح ملفات الجلسة (rm -rf)');
+        } catch (e) {
+            console.error('🗑️ ❌ فشل مسح الجلسة نهائياً:', e.message);
+        }
+    }
+    // حذف علامة المسح
+    try { fs.unlinkSync(clearFlagPath); } catch(e) {}
+}
+
+// =============================================
 // 2. إنشاء المجلدات المطلوبة
 // =============================================
 const dirs = [config.TEMP_PATH, config.LOGS_PATH, path.dirname(config.DB_PATH)];
