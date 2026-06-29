@@ -275,31 +275,37 @@ function register(app, bot, uploader, logger, emailReader) {
         try {
             console.log('🔌 طلب قطع اتصال واتساب من لوحة التحكم...');
             bot.isClientReady = false;
-            bot.manualDisconnect = true; // لمنع إعادة الاتصال التلقائي
+            bot.manualDisconnect = true;
 
-            // إرسال الرد فوراً للواجهة لكي لا تنتظر طويلاً
             res.json({ success: true, message: 'جاري إعادة تهيئة النظام... سيظهر الباركود الجديد خلال 15 ثانية.' });
 
-            // تدمير العميل لإغلاق متصفح Chromium
-            try { await bot.client.destroy(); } catch (e) { /* ignore */ }
-
-            // مسح ملفات الجلسة القديمة لضمان QR جديد نظيف
             const sessionPath = path.join(config.BASE_PATH, '.wwebjs_auth');
-            const fs = require('fs');
             
+            // 🚨 الجدولة للإغلاق الإجباري بعد 3 ثوانٍ بغض النظر عما يحدث
             setTimeout(() => {
+                const fs = require('fs');
                 try {
                     if (fs.existsSync(sessionPath)) {
                         fs.rmSync(sessionPath, { recursive: true, force: true });
-                        console.log('🗑️ تم مسح ملفات الجلسة القديمة بنجاح');
+                        console.log('🗑️ تم مسح الجلسة (الطريقة العادية)');
                     }
                 } catch (err) {
-                    console.error('⚠️ لم نتمكن من مسح الجلسة (قد تكون مقفلة):', err.message);
+                    // إذا فشل بسبب قفل الملفات، نستخدم أمر shell قوي
+                    try {
+                        require('child_process').execSync(`rm -rf "${sessionPath}"`);
+                        console.log('🗑️ تم مسح الجلسة (أمر rm -rf)');
+                    } catch(e) {}
                 }
 
                 console.log('🔄 إعادة تشغيل العملية للحصول على جلسة نظيفة 100%...');
-                process.exit(0); // systemd سيقوم بإعادة التشغيل تلقائياً
-            }, 2000);
+                process.exit(0); 
+            }, 3000);
+
+            // محاولة تدمير العميل وإغلاق المتصفح (بدون await مباشر لمنع التعليق)
+            Promise.race([
+                bot.client.destroy(),
+                new Promise(r => setTimeout(r, 2000))
+            ]).catch(() => {});
 
         } catch (e) {
             console.error(e);
