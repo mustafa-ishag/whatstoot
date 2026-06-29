@@ -105,6 +105,14 @@ class WhatsAppBot {
         this.client.on('disconnected', (reason) => {
             this.isClientReady = false;
             console.log('⚠️ تم قطع الاتصال:', reason);
+            console.log('🔄 جاري محاولة إعادة الاتصال خلال 5 ثوانٍ...');
+            setTimeout(() => {
+                try {
+                    this.client.initialize();
+                } catch (e) {
+                    console.error('❌ فشل إعادة الاتصال:', e.message);
+                }
+            }, 5000);
         });
 
         this.client.on('message', (msg) => this._handleMessage(msg));

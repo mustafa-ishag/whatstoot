@@ -13,6 +13,7 @@
 const express = require('express');
 const db = require('./database');
 const config = require('./config');
+const QRCode = require('qrcode');
 
 /**
  * تسجيل API routes
@@ -237,6 +238,33 @@ function register(app, bot, uploader, logger, emailReader) {
 
     app.get('/api/bot-status', botStatusHandler);
     app.get('/status', botStatusHandler);
+
+    // =============================================
+    // 📱 QR Code للمصادقة
+    // GET /api/qr
+    // =============================================
+    app.get('/api/qr', async (req, res) => {
+        try {
+            if (bot.isClientReady) {
+                return res.json({ success: false, reason: 'connected', message: 'واتساب متصل بالفعل' });
+            }
+
+            if (!bot.qrCodeData) {
+                return res.json({ success: false, reason: 'no_qr', message: 'لا يوجد QR Code حالياً — جاري التهيئة...' });
+            }
+
+            // تحويل بيانات QR الخام إلى صورة PNG base64
+            const qrImageDataUrl = await QRCode.toDataURL(bot.qrCodeData, {
+                width: 300,
+                margin: 2,
+                color: { dark: '#1a336b', light: '#ffffff' },
+            });
+
+            res.json({ success: true, qr: qrImageDataUrl });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
 
     // =============================================
     // 📋 قائمة المجموعات

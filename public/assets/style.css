@@ -859,3 +859,128 @@ tbody tr:last-child td {
     color: var(--text-muted);
 }
 
+/* ── WhatsApp Connection Banner ── */
+.wa-banner {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+}
+
+.wa-banner-connected {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    margin-top: 12px;
+    background: linear-gradient(135deg, rgba(37, 211, 102, 0.1), rgba(37, 211, 102, 0.05));
+    border: 1px solid rgba(37, 211, 102, 0.25);
+    border-radius: var(--radius);
+    color: var(--green);
+    font-weight: 600;
+    font-size: 0.9rem;
+    animation: fadeInBanner 0.5s ease;
+}
+
+.wa-banner-qr {
+    margin-top: 12px;
+    background: linear-gradient(135deg, rgba(255, 165, 0, 0.08), rgba(255, 140, 0, 0.04));
+    border: 1px solid rgba(255, 165, 0, 0.3);
+    border-radius: var(--radius);
+    padding: 24px;
+    animation: fadeInBanner 0.5s ease;
+}
+
+.wa-qr-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.wa-qr-header strong {
+    display: block;
+    color: #ffb347;
+    font-size: 1.1rem;
+    margin-bottom: 4px;
+}
+
+.wa-qr-header p {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+.wa-qr-card {
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+}
+
+.wa-qr-image {
+    width: 280px;
+    height: 280px;
+    border-radius: 16px;
+    background: #fff;
+    padding: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 60px rgba(255, 165, 0, 0.1);
+    transition: transform 0.3s ease;
+}
+
+.wa-qr-image:hover {
+    transform: scale(1.03);
+}
+
+.wa-qr-footer {
+    text-align: center;
+    margin-top: 12px;
+}
+
+.wa-qr-timer {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.wa-banner-offline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    margin-top: 12px;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(239, 68, 68, 0.05));
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: var(--radius);
+    color: var(--red);
+    font-weight: 600;
+    font-size: 0.9rem;
+    animation: fadeInBanner 0.5s ease;
+}
+
+.wa-offline-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(239, 68, 68, 0.3);
+    border-top-color: var(--red);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: auto;
+}
+
+.wa-banner-icon {
+    font-size: 1.3rem;
+    flex-shrink: 0;
+}
+
+.pulse-icon {
+    animation: pulseIcon 1.5s ease-in-out infinite;
+}
+
+@keyframes pulseIcon {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+}
+
+@keyframes fadeInBanner {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+

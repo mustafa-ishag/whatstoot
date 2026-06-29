@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/style.css">
+    <link rel="stylesheet" href="assets/style.css?v=5">
 </head>
 <body>
 
@@ -42,6 +42,39 @@
             </div>
         </div>
     </header>
+
+    <!-- WhatsApp Connection Banner -->
+    <div class="wa-banner" id="waBanner">
+        <!-- Connected state -->
+        <div class="wa-banner-connected" id="waBannerConnected" style="display: none;">
+            <span class="wa-banner-icon">✅</span>
+            <span>واتساب متصل ويعمل بنجاح</span>
+        </div>
+
+        <!-- QR Code state -->
+        <div class="wa-banner-qr" id="waBannerQR" style="display: none;">
+            <div class="wa-qr-header">
+                <span class="wa-banner-icon pulse-icon">📱</span>
+                <div>
+                    <strong>مطلوب مسح رمز QR</strong>
+                    <p>افتح واتساب على جوالك > الأجهزة المرتبطة > ربط جهاز</p>
+                </div>
+            </div>
+            <div class="wa-qr-card">
+                <img id="waQrImage" src="" alt="QR Code" class="wa-qr-image">
+            </div>
+            <div class="wa-qr-footer">
+                <div class="wa-qr-timer" id="waQrTimer">⏳ يتم تحديث الرمز تلقائياً...</div>
+            </div>
+        </div>
+
+        <!-- Disconnected state (no QR yet) -->
+        <div class="wa-banner-offline" id="waBannerOffline" style="display: none;">
+            <span class="wa-banner-icon">⚠️</span>
+            <span>واتساب غير متصل — جاري إعادة المحاولة...</span>
+            <div class="wa-offline-spinner"></div>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <main class="main">
@@ -250,6 +283,6 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="assets/app.js?v=4"></script>
+    <script src="assets/app.js?v=5"></script>
 </body>
 </html>
