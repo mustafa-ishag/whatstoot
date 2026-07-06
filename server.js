@@ -138,9 +138,43 @@ const worker = new QueueWorker(uploader, logger, (chatId, message) => {
 });
 
 // =============================================
-// 9. بدء التشغيل
+// 9. بدء التشغيل — مع حجز البورت إجبارياً
 // =============================================
-app.listen(config.PORT, () => {
+const { execSync } = require('child_process');
+
+function forceKillPort(port) {
+    try {
+        if (process.platform === 'win32') {
+            const result = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8' });
+            const lines = result.trim().split('\n');
+            for (const line of lines) {
+                const pid = line.trim().split(/\s+/).pop();
+                if (pid && pid !== '0') {
+                    try { execSync(`taskkill /F /PID ${pid}`); } catch(e) {}
+                    console.log(`🔪 تم قتل العملية ${pid} على البورت ${port}`);
+                }
+            }
+        } else {
+            const result = execSync(`lsof -t -i :${port}`, { encoding: 'utf8' });
+            const pids = result.trim().split('\n').filter(Boolean);
+            for (const pid of pids) {
+                try { execSync(`kill -9 ${pid}`); } catch(e) {}
+                console.log(`🔪 تم قتل العملية ${pid} على البورت ${port}`);
+            }
+        }
+    } catch (e) {
+        // لا توجد عملية على البورت — ممتاز
+    }
+}
+
+// حجز البورت إجبارياً
+console.log(`🔒 جاري حجز البورت ${config.PORT} إجبارياً...`);
+forceKillPort(config.PORT);
+
+// انتظار قصير حتى يتحرر البورت
+setTimeout(() => {
+
+const server = app.listen(config.PORT, () => {
     console.log('');
     console.log('╔══════════════════════════════════════════╗');
     console.log('║   ✅ WhatsToot Bot — Ready!              ║');
@@ -184,6 +218,22 @@ app.listen(config.PORT, () => {
         console.log('📧 قارئ البريد معطّل (EMAIL_ENABLED=false)');
     }
 });
+
+// معالجة خطأ البورت المحجوز
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ البورت ${config.PORT} لا يزال محجوزاً! جاري المحاولة مرة أخرى...`);
+        forceKillPort(config.PORT);
+        setTimeout(() => {
+            server.listen(config.PORT);
+        }, 2000);
+    } else {
+        console.error('❌ خطأ في السيرفر:', err.message);
+        process.exit(1);
+    }
+});
+
+}, 1000); // نهاية setTimeout للانتظار بعد قتل العملية
 
 // =============================================
 // معالجة إيقاف التطبيق
