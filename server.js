@@ -143,13 +143,14 @@ const worker = new QueueWorker(uploader, logger, (chatId, message) => {
 const { execSync } = require('child_process');
 
 function forceKillPort(port) {
+    const myPid = String(process.pid);
     try {
         if (process.platform === 'win32') {
             const result = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8' });
             const lines = result.trim().split('\n');
             for (const line of lines) {
                 const pid = line.trim().split(/\s+/).pop();
-                if (pid && pid !== '0') {
+                if (pid && pid !== '0' && pid !== myPid) {
                     try { execSync(`taskkill /F /PID ${pid}`); } catch(e) {}
                     console.log(`🔪 تم قتل العملية ${pid} على البورت ${port}`);
                 }
@@ -158,12 +159,17 @@ function forceKillPort(port) {
             const result = execSync(`lsof -t -i :${port}`, { encoding: 'utf8' });
             const pids = result.trim().split('\n').filter(Boolean);
             for (const pid of pids) {
-                try { execSync(`kill -9 ${pid}`); } catch(e) {}
-                console.log(`🔪 تم قتل العملية ${pid} على البورت ${port}`);
+                if (pid !== myPid) {
+                    try { execSync(`kill -9 ${pid}`); } catch(e) {}
+                    console.log(`🔪 تم قتل العملية ${pid} على البورت ${port}`);
+                } else {
+                    console.log(`⏭️ تم تجاهل العملية الحالية (PID ${myPid})`);
+                }
             }
         }
     } catch (e) {
         // لا توجد عملية على البورت — ممتاز
+        console.log(`✅ البورت ${port} متاح`);
     }
 }
 
@@ -171,7 +177,7 @@ function forceKillPort(port) {
 console.log(`🔒 جاري حجز البورت ${config.PORT} إجبارياً...`);
 forceKillPort(config.PORT);
 
-// انتظار قصير حتى يتحرر البورت
+// انتظار قصير حتى يتحرر البورت ثم التشغيل
 setTimeout(() => {
 
 const server = app.listen(config.PORT, () => {
@@ -219,14 +225,21 @@ const server = app.listen(config.PORT, () => {
     }
 });
 
-// معالجة خطأ البورت المحجوز
+// معالجة خطأ البورت المحجوز — محاولة واحدة فقط
+let retryCount = 0;
 server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`❌ البورت ${config.PORT} لا يزال محجوزاً! جاري المحاولة مرة أخرى...`);
+    if (err.code === 'EADDRINUSE' && retryCount < 1) {
+        retryCount++;
+        console.error(`❌ البورت ${config.PORT} محجوز! جاري المحاولة مرة أخيرة...`);
         forceKillPort(config.PORT);
         setTimeout(() => {
             server.listen(config.PORT);
-        }, 2000);
+        }, 3000);
+    } else if (err.code === 'EADDRINUSE') {
+        console.error(`❌ فشل حجز البورت ${config.PORT} نهائياً. أوقف العملية المحجوزة يدوياً:`);
+        console.error(`   sudo lsof -i :${config.PORT}`);
+        console.error(`   sudo kill -9 <PID>`);
+        process.exit(1);
     } else {
         console.error('❌ خطأ في السيرفر:', err.message);
         process.exit(1);
