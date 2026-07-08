@@ -116,7 +116,7 @@ const bot = new WhatsAppBot(imageProcessor, logger);
 // 7. تهيئة قارئ البريد الإلكتروني
 // =============================================
 const EmailReader = require('./src/email-reader');
-const emailReader = new EmailReader(bot, logger);
+const emailReader = new EmailReader(bot, logger, uploader);
 
 // =============================================
 // 8. تسجيل API Routes

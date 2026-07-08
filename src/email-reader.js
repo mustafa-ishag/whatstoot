@@ -13,8 +13,9 @@ const path = require('path');
 const config = require('./config');
 const db = require('./database');
 class EmailReader {
-    constructor(bot, logger) {
+    constructor(bot, logger, uploader = null) {
         this.bot = bot;
+        this.uploader = uploader;
         this.logger = logger;
         this.isRunning = false;
         this.checkInterval = null;
@@ -268,7 +269,10 @@ class EmailReader {
             console.log('📧 ⚠️ لا توجد ملفات PDF للإرسال');
         }
 
-        // 4. (تم تعليم الرسالة كمقروءة مسبقاً)
+        // 4. أرشفة الملفات في Synology Drive
+        if (workOrder && pdfFilesToSend.length > 0 && this.uploader) {
+            await this._archiveToSynology(pdfFilesToSend, workOrder);
+        }
 
         // 5. حذف الملفات المؤقتة
         for (const file of pdfFilesToSend) {
@@ -402,6 +406,45 @@ class EmailReader {
         }
 
         this.logger.info(`Sent ${pdfFiles.length} PDF(s) for WO ${workOrder || 'N/A'} to ${target}`);
+    }
+
+    /**
+     * أرشفة ملفات PDF في Synology Drive داخل مجلد أمر العمل
+     */
+    async _archiveToSynology(pdfFiles, workOrder) {
+        console.log(`📧 📁 جاري أرشفة ${pdfFiles.length} ملف في Synology...`);
+
+        try {
+            // إنشاء/الحصول على مجلد أمر العمل مع مجلد فرعي "email"
+            const folderPath = await this.uploader.getOrCreateFolder(workOrder, 'email');
+            console.log(`📧 📂 مجلد الأرشفة: ${folderPath}`);
+
+            let archived = 0;
+            for (const file of pdfFiles) {
+                try {
+                    if (!fs.existsSync(file.path)) {
+                        console.log(`📧 ⚠️ الملف غير موجود للأرشفة: ${file.name}`);
+                        continue;
+                    }
+
+                    await this.uploader.upload(file.path, folderPath, file.name);
+                    archived++;
+                    console.log(`📧 ✅ تم أرشفة: ${file.name}`);
+                } catch (err) {
+                    console.error(`📧 ❌ خطأ أرشفة ${file.name}:`, err.message);
+                    this.logger.error(`Archive error for ${file.name}: ${err.message}`);
+                }
+            }
+
+            if (archived > 0) {
+                this.logger.info(`Archived ${archived}/${pdfFiles.length} file(s) for WO ${workOrder} to Synology`);
+                console.log(`📧 ✅ تم أرشفة ${archived} من ${pdfFiles.length} ملف في Synology`);
+            }
+        } catch (err) {
+            console.error(`📧 ❌ خطأ في أرشفة أمر العمل ${workOrder}:`, err.message);
+            this.logger.error(`Archive folder error for WO ${workOrder}: ${err.message}`);
+            // لا نرمي الخطأ — الأرشفة اختيارية ولا تمنع باقي العمليات
+        }
     }
 
     /**
