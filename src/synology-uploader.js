@@ -267,6 +267,7 @@ class SynologyUploader {
             'image/tiff': 'tiff',
             'video/mp4': 'mp4',
             'video/3gpp': '3gp',
+            'application/pdf': 'pdf',
         };
         return map[mimeType] || 'jpg';
     }
@@ -509,6 +510,7 @@ class SynologyUploader {
             '.webp': 'image/webp', '.bmp': 'image/bmp',
             '.svg': 'image/svg+xml', '.tiff': 'image/tiff',
             '.mp4': 'video/mp4', '.3gp': 'video/3gpp',
+            '.pdf': 'application/pdf',
         };
         return types[ext] || 'application/octet-stream';
     }

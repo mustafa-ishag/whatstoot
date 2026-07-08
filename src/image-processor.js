@@ -59,10 +59,10 @@ class ImageProcessor {
      * @returns {Promise<{ success: boolean, action: string, work_order?: string, file_name?: string, message: string }>}
      */
     async processImage(input) {
-        const { image_base64, mimetype, caption, work_order: inputWO, group_id, group_name, sender } = input;
+        const { image_base64, mimetype, caption, work_order: inputWO, group_id, group_name, sender, original_filename } = input;
 
         if (!image_base64) {
-            return { success: false, message: 'No image data' };
+            return { success: false, message: 'No media data' };
         }
 
         try {
@@ -70,12 +70,15 @@ class ImageProcessor {
             const mediaData = Buffer.from(image_base64, 'base64');
             const ext = this.uploader.getExtensionFromMime(mimetype || 'image/jpeg');
             const isVideo = (mimetype || '').startsWith('video/');
-            const prefix = isVideo ? 'vid' : 'img';
-            const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+            const isPdf = mimetype === 'application/pdf';
+            const prefix = isPdf ? 'pdf' : (isVideo ? 'vid' : 'img');
+            const tempExt = isPdf ? 'pdf' : ext;
+            const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${tempExt}`;
             const tempPath = path.join(config.TEMP_PATH, tempName);
             fs.writeFileSync(tempPath, mediaData);
 
-            const mediaType = isVideo ? 'video' : 'image';
+            const mediaType = isPdf ? 'pdf' : (isVideo ? 'video' : 'image');
+            const mediaLabel = isPdf ? 'الملف' : (isVideo ? 'الفيديو' : 'الصورة');
             this.logger.info(`Saved temp ${mediaType}: ${tempName} (${mediaData.length} bytes)`);
 
             // 2. حساب hash وفحص التكرار
@@ -96,7 +99,7 @@ class ImageProcessor {
                 // معالجة أي صور معلّقة لهذا المرسل
                 const processedIds = this.context.processWaitingImages(group_id, workOrder, sender);
                 if (processedIds.length > 0) {
-                    this.logger.info(`Linked ${workOrder} to ${processedIds.length} waiting images from ${sender} via resolved work order`);
+                    this.logger.info(`Linked ${workOrder} to ${processedIds.length} waiting items from ${sender} via resolved work order`);
                 }
             }
 
@@ -117,7 +120,7 @@ class ImageProcessor {
                     action: 'skipped',
                     reason: 'duplicate',
                     work_order: workOrder,
-                    message: `⚠️ ${isVideo ? 'الفيديو' : 'الصورة'} مكررة — تم تخطيها (أمر العمل: ${workOrder})`,
+                    message: `⚠️ ${mediaLabel} مكرر — تم تخطيه (أمر العمل: ${workOrder})`,
                 };
             }
 
@@ -129,20 +132,29 @@ class ImageProcessor {
                     group_id, group_name, sender, caption,
                 });
 
-                this.logger.info(`${isVideo ? 'Video' : 'Image'} queued (ID: ${queueId}), waiting for work order number...`);
+                this.logger.info(`${mediaType} queued (ID: ${queueId}), waiting for work order number...`);
 
                 return {
                     success: true,
                     action: 'queued',
                     queue_id: queueId,
-                    message: `⏳ تم استلام ${isVideo ? 'الفيديو' : 'الصورة'} — بانتظار رقم أمر العمل...`,
+                    message: `⏳ تم استلام ${mediaLabel} — بانتظار رقم أمر العمل...`,
                 };
             }
 
             // 5. رفع إلى Storage (Synology/Drive)
-            const subFolder = group_id ? group_name : sender;
+            // PDF يُرفع في مجلد فرعي 'documents'، الصور/الفيديو في مجلد المجموعة
+            const subFolder = isPdf ? 'documents' : (group_id ? group_name : sender);
             const folderId = await this.uploader.getOrCreateFolder(workOrder, subFolder);
-            const fileName = this.uploader.buildFileName(workOrder, ext);
+
+            // PDF يحتفظ باسمه الأصلي، الصور/الفيديو يُبنى لهم اسم جديد
+            let fileName;
+            if (isPdf && original_filename) {
+                fileName = `WO${workOrder}_${original_filename}`;
+            } else {
+                fileName = this.uploader.buildFileName(workOrder, tempExt);
+            }
+
             const result = await this.uploader.upload(tempPath, folderId, fileName);
 
             // 6. تسجيل في قاعدة البيانات
@@ -169,8 +181,8 @@ class ImageProcessor {
                 drive_id: result.id,
                 drive_url: result.url,
                 upload_id: uploadId,
-                media_type: isVideo ? 'video' : 'image',
-                message: `✅ تم رفع ${isVideo ? 'الفيديو' : 'الصورة'} بنجاح\n📁 أمر العمل: ${workOrder}\n📄 الملف: ${fileName}`,
+                media_type: mediaType,
+                message: `✅ تم رفع ${mediaLabel} بنجاح\n📁 أمر العمل: ${workOrder}\n📄 الملف: ${fileName}`,
             };
 
         } catch (e) {
