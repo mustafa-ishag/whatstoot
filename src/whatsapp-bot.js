@@ -8,6 +8,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const path = require('path');
+const fs = require('fs');
 const config = require('./config');
 
 class WhatsAppBot {
@@ -207,9 +208,68 @@ class WhatsAppBot {
 
                 const isImage = media.mimetype.startsWith('image/');
                 const isVideo = media.mimetype.startsWith('video/');
+                const isPdf = media.mimetype === 'application/pdf';
 
-                if (!isImage && !isVideo) {
+                if (!isImage && !isVideo && !isPdf) {
                     console.log(`⏩ تم تجاهل ميديا غير مدعومة: ${media.mimetype}`);
+                    return;
+                }
+
+                // =============================================
+                // 📄 معالجة ملفات PDF — أرشفة مباشرة في Synology
+                // =============================================
+                if (isPdf) {
+                    console.log(`\n📄 PDF ورد من ${senderName} (${senderId}) في ${groupName}`);
+                    
+                    const caption = msg.body || '';
+                    let wo = null;
+                    const match = caption.match(this.woPattern);
+                    const senderKey = `${groupId}_${senderId}`;
+
+                    if (match) {
+                        wo = match[0];
+                        this.recentWorkOrders.set(senderKey, { workOrder: wo, timestamp: Date.now() });
+                    } else {
+                        const cached = this.recentWorkOrders.get(senderKey);
+                        if (cached && (Date.now() - cached.timestamp < 300000)) {
+                            wo = cached.workOrder;
+                        }
+                    }
+
+                    if (!wo) {
+                        console.log('📄 ⚠️ لم يُعثر على رقم أمر عمل — تم تجاهل PDF');
+                        return;
+                    }
+
+                    console.log(`📄 🎯 أمر العمل: ${wo}`);
+
+                    try {
+                        const pdfData = Buffer.from(media.data, 'base64');
+                        const originalName = media.filename || `document_${Date.now()}.pdf`;
+                        const pdfName = `WO${wo}_${originalName}`;
+                        const tempPath = path.join(config.TEMP_PATH, pdfName);
+                        fs.writeFileSync(tempPath, pdfData);
+
+                        // رفع إلى Synology في مجلد documents
+                        const folderPath = await this.imageProcessor.uploader.getOrCreateFolder(wo, 'documents');
+                        await this.imageProcessor.uploader.upload(tempPath, folderPath, pdfName);
+
+                        // حذف الملف المؤقت
+                        try { fs.unlinkSync(tempPath); } catch(e) {}
+
+                        console.log(`📄 ✅ تم أرشفة PDF: ${pdfName}`);
+                        this.logger.info(`Archived PDF ${pdfName} for WO ${wo} from ${senderName}`);
+
+                        if (config.AUTO_REPLY_ENABLED) {
+                            await this.client.sendMessage(msg.from,
+                                `📄 تم أرشفة الملف بنجاح\n📁 أمر العمل: ${wo}\n📄 الملف: ${originalName}`
+                            );
+                        }
+                    } catch (err) {
+                        console.error(`📄 ❌ خطأ أرشفة PDF:`, err.message);
+                        this.logger.error(`PDF archive error for WO ${wo}: ${err.message}`);
+                        this.stats.errors++;
+                    }
                     return;
                 }
 
