@@ -361,10 +361,13 @@ class EmailReader {
             chatId = `${number}@c.us`;
         }
 
-        // إرسال رسالة تعريفية
+        // فاصل تزييني
+        const separator = `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`;
+
+        // رسالة تعريفية
         const intro = workOrder
-            ? `📧 بريد جديد — أمر العمل: ${workOrder}\n📋 الموضوع: ${subject}\n📎 عدد الملفات: ${pdfFiles.length}`
-            : `📧 بريد جديد\n📋 الموضوع: ${subject}\n📎 عدد الملفات: ${pdfFiles.length}`;
+            ? `${separator}\n🟢 *إسناد جديد*\n${separator}\n\n📋 *${subject}*\n📎 عدد الملفات: ${pdfFiles.length}`
+            : `${separator}\n🟢 *إسناد جديد*\n${separator}\n\n📋 *${subject}*\n📎 عدد الملفات: ${pdfFiles.length}`;
 
         try {
             await this.bot.client.sendMessage(chatId, intro);
@@ -387,9 +390,8 @@ class EmailReader {
                     file.name
                 );
 
-                const caption = workOrder
-                    ? `📄 ${file.name}\n📁 أمر العمل: ${workOrder}`
-                    : `📄 ${file.name}`;
+                // كابشن بسيط — اسم الملف فقط
+                const caption = `📄 ${file.name}`;
 
                 await this.bot.client.sendMessage(chatId, media, { caption });
                 console.log(`📧 ✅ تم إرسال: ${file.name}`);
