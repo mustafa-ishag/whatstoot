@@ -390,10 +390,7 @@ class EmailReader {
                     file.name
                 );
 
-                // كابشن بسيط — اسم الملف فقط
-                const caption = `📄 ${file.name}`;
-
-                await this.bot.client.sendMessage(chatId, media, { caption });
+                await this.bot.client.sendMessage(chatId, media);
                 console.log(`📧 ✅ تم إرسال: ${file.name}`);
                 this.stats.pdfsSent++;
 
