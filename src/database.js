@@ -37,6 +37,14 @@ function getInstance(dbPath) {
     _instance.pragma('synchronous = NORMAL');
     _instance.pragma('foreign_keys = ON');
 
+    // تحديثات الهيكل البرمجي (Migration)
+    try {
+        _instance.exec("ALTER TABLE uploads ADD COLUMN message_id TEXT");
+    } catch (e) {}
+    try {
+        _instance.exec("ALTER TABLE queue ADD COLUMN message_id TEXT");
+    } catch (e) {}
+
     return _instance;
 }
 
@@ -56,8 +64,8 @@ function applySchema(schemaPath) {
 function logUpload(data) {
     const db = getInstance();
     const stmt = db.prepare(`
-        INSERT INTO uploads (work_order, file_name, file_hash, drive_id, drive_url, group_id, group_name, sender, caption, status)
-        VALUES (@work_order, @file_name, @file_hash, @drive_id, @drive_url, @group_id, @group_name, @sender, @caption, @status)
+        INSERT INTO uploads (work_order, file_name, file_hash, drive_id, drive_url, group_id, group_name, sender, caption, status, message_id)
+        VALUES (@work_order, @file_name, @file_hash, @drive_id, @drive_url, @group_id, @group_name, @sender, @caption, @status, @message_id)
     `);
     const result = stmt.run({
         work_order: data.work_order,
@@ -70,6 +78,7 @@ function logUpload(data) {
         sender: data.sender || null,
         caption: data.caption || null,
         status: data.status || 'completed',
+        message_id: data.message_id || null,
     });
     return result.lastInsertRowid;
 }
@@ -165,8 +174,8 @@ function enqueue(data) {
     const timeoutAt = new Date(Date.now() + timeout * 1000).toISOString().replace('T', ' ').substring(0, 19);
 
     const stmt = db.prepare(`
-        INSERT INTO queue (image_path, file_hash, group_id, group_name, sender, caption, work_order, status, timeout_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO queue (image_path, file_hash, group_id, group_name, sender, caption, work_order, status, timeout_at, message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -178,7 +187,8 @@ function enqueue(data) {
         data.caption || null,
         data.work_order || null,
         data.status || 'waiting',
-        timeoutAt
+        timeoutAt,
+        data.message_id || null
     );
 
     return result.lastInsertRowid;
@@ -327,6 +337,19 @@ function updateUploadWorkOrder(id, toWO, driveId = null) {
     }
 }
 
+function isMessageProcessed(messageId) {
+    if (!messageId) return false;
+    const db = getInstance();
+    
+    // فحص الرفعات الناجحة أو المكررة
+    const rowUpload = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE message_id = ?").get(messageId);
+    if (rowUpload.c > 0) return true;
+    
+    // فحص الطابور
+    const rowQueue = db.prepare("SELECT COUNT(*) as c FROM queue WHERE message_id = ?").get(messageId);
+    return rowQueue.c > 0;
+}
+
 module.exports = {
     getInstance,
     applySchema,
@@ -344,6 +367,7 @@ module.exports = {
     getStats,
     // Duplicate
     isDuplicate,
+    isMessageProcessed,
     // Reset & Move
     resetWorkOrder, getUploadsForMove, updateUploadWorkOrder,
 };

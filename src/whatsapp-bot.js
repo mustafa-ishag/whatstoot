@@ -299,6 +299,7 @@ class WhatsAppBot {
                     sender: senderId,
                     sender_name: senderName,
                     timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
+                    message_id: msg.id._serialized,
                 };
 
                 this._enqueueImage(payload, msg.from);
@@ -571,7 +572,7 @@ class WhatsAppBot {
      */
     async processUnreadMessages() {
         try {
-            console.log('🔄 جاري فحص الرسائل غير المقروءة المعلقة أثناء توقف البوت...');
+            console.log('🔄 جاري فحص الرسائل غير المقروءة والرسائل الفائتة أثناء توقف البوت...');
             
             // الانتظار حتى تكتمل مزامنة المحادثات من خادم واتساب ويب
             let stats = { total: 0, unread: 0 };
@@ -587,7 +588,6 @@ class WhatsAppBot {
                 console.log(`📊 فحص مزامنة المحادثات (${i + 1}/6): الإجمالي المحمل=${stats.total}, غير المقروءة=${stats.unread}`);
                 
                 if (stats.total > 0) {
-                    // ننتظر 5 ثوانٍ إضافية للتأكد من وصول كافة العدادات والرسائل غير المقروءة بالكامل
                     console.log('⏳ تم رصد المحادثات. ننتظر 5 ثوانٍ إضافية لاكتمال مزامنة العدادات...');
                     await this._sleep(5000);
                     break;
@@ -595,42 +595,44 @@ class WhatsAppBot {
                 await this._sleep(5000);
             }
 
-            // جلب المجموعات غير المقروءة مباشرة من كود الصفحة دون استخدام getChats() لتفادي أخطاء الواتساب
-            const unreadGroups = await this.client.pupPage.evaluate(() => {
+            // جلب كل المجموعات المراقبة النشطة في الحساب
+            const groupsToSync = await this.client.pupPage.evaluate((monitoredGroups) => {
                 const ChatCollection = window.require('WAWebCollections').Chat;
                 if (!ChatCollection) return [];
+                
                 return ChatCollection.getModelsArray()
-                    .filter(c => c.unreadCount > 0 && c.isGroup)
+                    .filter(c => c.isGroup)
                     .map(c => ({
                         id: c.id._serialized,
                         name: c.name || c.formattedTitle || 'Unknown Group',
                         unreadCount: c.unreadCount
-                    }));
-            });
+                    }))
+                    .filter(g => {
+                        if (monitoredGroups === 'all') return true;
+                        const groups = Array.isArray(monitoredGroups) ? monitoredGroups : monitoredGroups.split(',').map(name => name.trim());
+                        return groups.includes(g.id) || groups.includes(g.name);
+                    });
+            }, this.monitoredGroups);
 
-            if (!unreadGroups || unreadGroups.length === 0) {
-                console.log('📝 لا توجد رسائل معلقة غير مقروءة.');
+            if (!groupsToSync || groupsToSync.length === 0) {
+                console.log('📝 لا توجد مجموعات مراقبة للمزامنة.');
                 return;
             }
 
-            let totalUnread = 0;
+            let totalProcessed = 0;
+            const syncLimit = 100; // فحص آخر 100 رسالة في كل مجموعة
+            const db = require('./database');
             const Message = require('whatsapp-web.js/src/structures/Message');
 
-            for (const group of unreadGroups) {
+            for (const group of groupsToSync) {
                 const groupId = group.id;
                 const groupName = group.name;
-
-                // فحص إذا كانت المجموعة مراقبة
-                if (this.monitoredGroups !== 'all') {
-                    const groups = Array.isArray(this.monitoredGroups)
-                        ? this.monitoredGroups
-                        : this.monitoredGroups.split(',').map(g => g.trim());
-                    if (!groups.includes(groupId) && !groups.includes(groupName)) continue;
-                }
-
-                console.log(`📥 جاري معالجة ${group.unreadCount} رسائل غير مقروءة من المجموعة: ${groupName}`);
                 
-                // جلب الرسائل مباشرة وفك تشفيرها يدوياً
+                // نقوم بمزامنة المجموعة إذا كانت تحتوي رسائل غير مقروءة، أو نقوم بمزامنة آخر 100 رسالة بشكل عام للتحقق
+                const limit = Math.max(syncLimit, group.unreadCount || 0);
+
+                console.log(`🔄 جاري مزامنة وفحص آخر ${limit} رسالة في المجموعة: ${groupName}...`);
+                
                 try {
                     const rawMsgs = await this.client.pupPage.evaluate(async (chatId, limit) => {
                         const chatWid = window.require('WAWebWidFactory').createWid(chatId);
@@ -648,7 +650,7 @@ class WhatsAppBot {
                         
                         // تحميل الرسائل السابقة إذا لم تكن كافية
                         let attempts = 0;
-                        while (msgs.length < limit && attempts < 3) {
+                        while (msgs.length < limit && attempts < 5) {
                             attempts++;
                             const loadedMessages = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
                             if (!loadedMessages || !loadedMessages.length) break;
@@ -657,33 +659,47 @@ class WhatsAppBot {
 
                         const slicedMsgs = msgs.slice(-limit);
                         return slicedMsgs.map(m => window.WWebJS.getMessageModel(m));
-                    }, groupId, group.unreadCount);
+                    }, groupId, limit);
 
-                    // تحويلها لكائنات رسائل متوافقة وتمريرها
+                    let groupProcessedCount = 0;
                     for (const rawMsg of rawMsgs) {
+                        const msgId = rawMsg.id._serialized;
+                        
+                        // تخطي الرسالة إذا تم معالجتها مسبقاً وتخزينها في قاعدة البيانات
+                        if (db.isMessageProcessed(msgId)) {
+                            continue;
+                        }
+
                         try {
                             const msg = new Message(this.client, rawMsg);
                             await this._handleMessage(msg);
-                            totalUnread++;
+                            groupProcessedCount++;
+                            totalProcessed++;
                         } catch (msgErr) {
-                            console.error(`❌ خطأ أثناء معالجة رسالة معلقة:`, msgErr.message || msgErr);
+                            console.error(`❌ خطأ أثناء معالجة رسالة سابقة:`, msgErr.message || msgErr);
                         }
                     }
 
-                    // وضع علامة مقروءة
-                    await this.client.pupPage.evaluate(async (chatId) => {
-                        return await window.WWebJS.sendSeen(chatId);
-                    }, groupId);
+                    if (groupProcessedCount > 0) {
+                        console.log(`✅ تم معالجة وأرشفة ${groupProcessedCount} رسالة/صورة فائتة في المجموعة: ${groupName}`);
+                    }
+
+                    // وضع علامة مقروءة للمجموعة
+                    if (group.unreadCount > 0) {
+                        await this.client.pupPage.evaluate(async (chatId) => {
+                            return await window.WWebJS.sendSeen(chatId);
+                        }, groupId);
+                    }
 
                 } catch (grpErr) {
-                    console.error(`❌ فشل جلب الرسائل المعلقة للمجموعة ${groupName}:`, grpErr.message || grpErr);
+                    console.error(`❌ فشل مزامنة الرسائل للمجموعة ${groupName}:`, grpErr.message || grpErr);
                 }
             }
 
-            if (totalUnread > 0) {
-                console.log(`✅ تم الانتهاء من معالجة ${totalUnread} رسائل معلقة بنجاح!`);
+            if (totalProcessed > 0) {
+                console.log(`✅ تم الانتهاء من فحص ومزامنة المجموعات. إجمالي ما تم معالجته وأرشفته: ${totalProcessed} رسالة/ملف.`);
             } else {
-                console.log('📝 لا توجد رسائل معلقة غير مقروءة.');
+                console.log('📝 تم فحص المجموعات، ولم يتم العثور على أي رسائل أو ميديا فائتة غير مؤرشفة.');
             }
         } catch (error) {
             console.error('❌ خطأ أثناء فحص الرسائل غير المقروءة:');

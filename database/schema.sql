@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS uploads (
     sender      TEXT,
     caption     TEXT,
     status      TEXT DEFAULT 'completed' CHECK(status IN ('completed','failed','duplicate','pending')),
+    message_id  TEXT,
     uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS queue (
     work_order  TEXT,
     status      TEXT DEFAULT 'waiting' CHECK(status IN ('waiting','processing','completed','unsorted','failed')),
     attempts    INTEGER DEFAULT 0,
+    message_id  TEXT,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     timeout_at  DATETIME,
     processed_at DATETIME

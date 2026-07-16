@@ -59,7 +59,7 @@ class ImageProcessor {
      * @returns {Promise<{ success: boolean, action: string, work_order?: string, file_name?: string, message: string }>}
      */
     async processImage(input) {
-        const { image_base64, mimetype, caption, work_order: inputWO, group_id, group_name, sender, original_filename } = input;
+        const { image_base64, mimetype, caption, work_order: inputWO, group_id, group_name, sender, original_filename, message_id } = input;
 
         if (!image_base64) {
             return { success: false, message: 'No media data' };
@@ -112,6 +112,7 @@ class ImageProcessor {
                     file_hash: hash,
                     group_id, group_name, sender, caption,
                     status: 'duplicate',
+                    message_id,
                 });
                 this.logger.warning(`Duplicate ${mediaType} skipped for WO ${workOrder}`);
 
@@ -130,6 +131,7 @@ class ImageProcessor {
                     image_path: tempPath,
                     file_hash: hash,
                     group_id, group_name, sender, caption,
+                    message_id,
                 });
 
                 this.logger.info(`${mediaType} queued (ID: ${queueId}), waiting for work order number...`);
@@ -166,6 +168,7 @@ class ImageProcessor {
                 drive_url: result.url,
                 group_id, group_name, sender, caption,
                 status: 'completed',
+                message_id,
             });
 
             // 7. حذف الملف المؤقت
