@@ -51,6 +51,9 @@ class WhatsAppBot {
             authStrategy: new LocalAuth({
                 dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
             }),
+            webVersionCache: {
+                type: 'none',
+            },
             puppeteer: {
                 headless: true,
                 args: [
@@ -145,6 +148,9 @@ class WhatsAppBot {
             authStrategy: new LocalAuth({
                 dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
             }),
+            webVersionCache: {
+                type: 'none',
+            },
             puppeteer: {
                 headless: true,
                 args: [
@@ -235,9 +241,10 @@ class WhatsAppBot {
             // 🖼 معالجة الميديا (صور + فيديو + PDF)
             // =============================================
             if (msg.hasMedia) {
-                const media = await msg.downloadMedia();
+                const media = await this._downloadMediaWithRetry(msg, 3, 3000);
                 if (!media) {
-                    console.log('⚠️ فشل تحميل الميديا');
+                    console.log('⚠️ فشل تحميل الميديا بعد عدة محاولات');
+                    this.stats.errors++;
                     return;
                 }
 
@@ -507,6 +514,25 @@ class WhatsAppBot {
         } else if (result.action === 'skipped') {
             console.log('⚠️ صورة مكررة — تم التخطي');
         }
+    }
+
+    /**
+     * تحميل الميديا مع إعادة محاولة وتأخير
+     */
+    async _downloadMediaWithRetry(msg, maxRetries = 3, delayMs = 3000) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const media = await msg.downloadMedia();
+                if (media) return media;
+                console.log(`⚠️ محاولة ${attempt}/${maxRetries}: downloadMedia أعاد null`);
+            } catch (err) {
+                console.log(`⚠️ محاولة ${attempt}/${maxRetries}: خطأ في تحميل الميديا: ${err.message || err}`);
+            }
+            if (attempt < maxRetries) {
+                await this._sleep(delayMs);
+            }
+        }
+        return null;
     }
 
     _isRetryableError(msg) {
