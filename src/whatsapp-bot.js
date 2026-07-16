@@ -187,17 +187,30 @@ class WhatsAppBot {
             // تجاهل رسائل الحالة والمحادثات الفردية مبكراً لتجنب أخطاء Puppeteer (مثل خطأ r: r)
             if (!msg.from || !msg.from.includes('@g.us')) return;
 
+            let groupId = msg.from;
+            let groupName = 'Unknown Group';
             let chat;
+
             try {
                 chat = await msg.getChat();
+                if (!chat.isGroup) return;
+                groupId = chat.id._serialized;
+                groupName = chat.name || 'Unknown Group';
             } catch (err) {
-                return; // تجاهل الرسالة إذا فشل جلب بيانات المحادثة
+                // إذا فشل getChat بسبب مشاكل Puppeteer/WhatsApp Web، نسترد الاسم من قاعدة البيانات أو المعرّف
+                try {
+                    const db = require('./database');
+                    const row = db.getInstance().prepare('SELECT group_name FROM uploads WHERE group_id = ? AND group_name IS NOT NULL LIMIT 1').get(groupId);
+                    if (row && row.group_name) {
+                        groupName = row.group_name;
+                    } else {
+                        groupName = groupId.split('@')[0];
+                    }
+                } catch (dbErr) {
+                    groupName = groupId.split('@')[0];
+                }
+                console.log(`⚠️ تعذر جلب تفاصيل المجموعة (${groupId}) بسبب خطأ الواتساب. سنستمر باستخدام الاسم: ${groupName}`);
             }
-            
-            if (!chat.isGroup) return;
-
-            const groupId = chat.id._serialized;
-            const groupName = chat.name || 'Unknown Group';
 
             // فحص إذا كانت المجموعة مراقبة
             if (this.monitoredGroups !== 'all') {
@@ -207,9 +220,16 @@ class WhatsAppBot {
                 if (!groups.includes(groupId) && !groups.includes(groupName)) return;
             }
 
-            const contact = await msg.getContact();
-            const senderName = contact.pushname || contact.number || 'Unknown';
-            const senderId = msg.author || msg.from;
+            let senderName = 'Unknown';
+            let senderId = msg.author || msg.from || 'Unknown';
+            try {
+                const contact = await msg.getContact();
+                senderName = contact.pushname || contact.number || 'Unknown';
+            } catch (err) {
+                if (senderId) {
+                    senderName = senderId.split('@')[0];
+                }
+            }
 
             // =============================================
             // 🖼 معالجة الميديا (صور + فيديو + PDF)
