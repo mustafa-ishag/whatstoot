@@ -10,6 +10,7 @@ const qrcode = require('qrcode-terminal');
 const path = require('path');
 const fs = require('fs');
 const config = require('./config');
+const { downloadMediaDirect } = require('./media-downloader');
 
 class WhatsAppBot {
     constructor(imageProcessor, logger) {
@@ -517,17 +518,33 @@ class WhatsAppBot {
     }
 
     /**
-     * تحميل الميديا مع إعادة محاولة وتأخير
+     * تحميل الميديا مع إعادة محاولة وتأخير وطريقة بديلة
      */
     async _downloadMediaWithRetry(msg, maxRetries = 3, delayMs = 3000) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
+                // المحاولة بالطريقة العادية أولاً
                 const media = await msg.downloadMedia();
                 if (media) return media;
                 console.log(`⚠️ محاولة ${attempt}/${maxRetries}: downloadMedia أعاد null`);
             } catch (err) {
-                console.log(`⚠️ محاولة ${attempt}/${maxRetries}: خطأ في تحميل الميديا: ${err.message || err}`);
+                console.log(`⚠️ محاولة ${attempt}/${maxRetries}: خطأ في طريقة downloadMedia العادية: ${err.message || err}`);
             }
+
+            // إذا فشلت الطريقة العادية، نجرب الطريقة البديلة المباشرة (فك التشفير اليدوي)
+            try {
+                if (msg._data) {
+                    console.log(`🔄 محاولة ${attempt}/${maxRetries}: جاري تحميل الميديا بالطريقة المباشرة البديلة...`);
+                    const mediaDirect = await downloadMediaDirect(msg._data);
+                    if (mediaDirect) {
+                        console.log(`✅ تم تحميل الميديا وتفكيكها بنجاح عبر الطريقة البديلة!`);
+                        return mediaDirect;
+                    }
+                }
+            } catch (directErr) {
+                console.log(`❌ محاولة ${attempt}/${maxRetries}: فشلت الطريقة البديلة أيضاً: ${directErr.message || directErr}`);
+            }
+
             if (attempt < maxRetries) {
                 await this._sleep(delayMs);
             }
