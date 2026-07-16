@@ -297,7 +297,7 @@ class WhatsAppBot {
             }
 
         } catch (error) {
-            console.error('❌ خطأ في معالجة الرسالة:', error.message);
+            console.error('❌ خطأ في معالجة الرسالة:', error);
             this.stats.errors++;
         }
     }
