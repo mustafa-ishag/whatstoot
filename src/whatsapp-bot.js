@@ -181,6 +181,7 @@ class WhatsAppBot {
     async _handleMessage(msg) {
         try {
             this.stats.messagesReceived++;
+            console.log(`📥 رسالة جديدة مستلمة: من=${msg.from}, من_تلقائي=${msg.fromMe}, النوع=${msg.type}, النص=${msg.body ? msg.body.substring(0, 30) : ''}`);
             if (msg.fromMe) return;
 
             // تجاهل رسائل الحالة والمحادثات الفردية مبكراً لتجنب أخطاء Puppeteer (مثل خطأ r: r)
