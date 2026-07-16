@@ -573,56 +573,91 @@ class WhatsAppBot {
         try {
             console.log('🔄 جاري فحص الرسائل غير المقروءة المعلقة أثناء توقف البوت...');
             
-            let chats;
-            let retries = 5;
-            while (retries > 0) {
-                try {
-                    chats = await this.client.getChats();
-                    break;
-                } catch (e) {
-                    retries--;
-                    if (retries === 0) throw e;
-                    console.log(`⏳ جاري الانتظار لمزامنة المحادثات من السيرفر (محاولات متبقية: ${retries})...`);
-                    await this._sleep(5000);
-                }
+            // جلب المجموعات غير المقروءة مباشرة من كود الصفحة دون استخدام getChats() لتفادي أخطاء الواتساب
+            const unreadGroups = await this.client.pupPage.evaluate(() => {
+                const ChatCollection = window.require('WAWebCollections').Chat;
+                if (!ChatCollection) return [];
+                return ChatCollection.getModelsArray()
+                    .filter(c => c.unreadCount > 0 && c.isGroup)
+                    .map(c => ({
+                        id: c.id._serialized,
+                        name: c.name || c.formattedTitle || 'Unknown Group',
+                        unreadCount: c.unreadCount
+                    }));
+            });
+
+            if (!unreadGroups || unreadGroups.length === 0) {
+                console.log('📝 لا توجد رسائل معلقة غير مقروءة.');
+                return;
             }
 
             let totalUnread = 0;
-            
-            for (const chat of chats) {
-                if (chat.isGroup && chat.unreadCount > 0) {
-                    const groupId = chat.id._serialized;
-                    const groupName = chat.name || 'Unknown Group';
+            const Message = require('whatsapp-web.js/src/structures/Message');
 
-                    // فحص إذا كانت المجموعة مراقبة
-                    if (this.monitoredGroups !== 'all') {
-                        const groups = Array.isArray(this.monitoredGroups)
-                            ? this.monitoredGroups
-                            : this.monitoredGroups.split(',').map(g => g.trim());
-                        if (!groups.includes(groupId) && !groups.includes(groupName)) continue;
-                    }
+            for (const group of unreadGroups) {
+                const groupId = group.id;
+                const groupName = group.name;
 
-                    console.log(`📥 جاري معالجة ${chat.unreadCount} رسائل غير مقروءة من المجموعة: ${groupName}`);
-                    
-                    // جلب الرسائل غير المقروءة
-                    const messages = await chat.fetchMessages({ limit: chat.unreadCount });
-                    for (const msg of messages) {
+                // فحص إذا كانت المجموعة مراقبة
+                if (this.monitoredGroups !== 'all') {
+                    const groups = Array.isArray(this.monitoredGroups)
+                        ? this.monitoredGroups
+                        : this.monitoredGroups.split(',').map(g => g.trim());
+                    if (!groups.includes(groupId) && !groups.includes(groupName)) continue;
+                }
+
+                console.log(`📥 جاري معالجة ${group.unreadCount} رسائل غير مقروءة من المجموعة: ${groupName}`);
+                
+                // جلب الرسائل مباشرة وفك تشفيرها يدوياً
+                try {
+                    const rawMsgs = await this.client.pupPage.evaluate(async (chatId, limit) => {
+                        const chatWid = window.require('WAWebWidFactory').createWid(chatId);
+                        const chat = window.require('WAWebCollections').Chat.get(chatWid) ||
+                            (await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid))?.chat;
+                        
+                        if (!chat) return [];
+
+                        const msgFilter = (m) => {
+                            if (m.isNotification) return false;
+                            return true;
+                        };
+
+                        let msgs = chat.msgs.getModelsArray().filter(msgFilter);
+                        
+                        // تحميل الرسائل السابقة إذا لم تكن كافية
+                        let attempts = 0;
+                        while (msgs.length < limit && attempts < 3) {
+                            attempts++;
+                            const loadedMessages = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
+                            if (!loadedMessages || !loadedMessages.length) break;
+                            msgs = [...loadedMessages.filter(msgFilter), ...msgs];
+                        }
+
+                        const slicedMsgs = msgs.slice(-limit);
+                        return slicedMsgs.map(m => window.WWebJS.getMessageModel(m));
+                    }, groupId, group.unreadCount);
+
+                    // تحويلها لكائنات رسائل متوافقة وتمريرها
+                    for (const rawMsg of rawMsgs) {
                         try {
+                            const msg = new Message(this.client, rawMsg);
                             await this._handleMessage(msg);
                             totalUnread++;
                         } catch (msgErr) {
                             console.error(`❌ خطأ أثناء معالجة رسالة معلقة:`, msgErr.message || msgErr);
                         }
                     }
-                    
-                    // وضع علامة مقروءة حتى لا تتكرر المعالجة في التشغيل القادم
-                    try {
-                        await chat.sendSeen();
-                    } catch (e) {
-                        // تجاهل فشل إرسال علامة القراءة
-                    }
+
+                    // وضع علامة مقروءة
+                    await this.client.pupPage.evaluate(async (chatId) => {
+                        return await window.WWebJS.sendSeen(chatId);
+                    }, groupId);
+
+                } catch (grpErr) {
+                    console.error(`❌ فشل جلب الرسائل المعلقة للمجموعة ${groupName}:`, grpErr.message || grpErr);
                 }
             }
+
             if (totalUnread > 0) {
                 console.log(`✅ تم الانتهاء من معالجة ${totalUnread} رسائل معلقة بنجاح!`);
             } else {
