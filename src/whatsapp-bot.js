@@ -183,7 +183,16 @@ class WhatsAppBot {
             this.stats.messagesReceived++;
             if (msg.fromMe) return;
 
-            const chat = await msg.getChat();
+            // تجاهل رسائل الحالة والمحادثات الفردية مبكراً لتجنب أخطاء Puppeteer (مثل خطأ r: r)
+            if (!msg.from || !msg.from.includes('@g.us')) return;
+
+            let chat;
+            try {
+                chat = await msg.getChat();
+            } catch (err) {
+                return; // تجاهل الرسالة إذا فشل جلب بيانات المحادثة
+            }
+            
             if (!chat.isGroup) return;
 
             const groupId = chat.id._serialized;
