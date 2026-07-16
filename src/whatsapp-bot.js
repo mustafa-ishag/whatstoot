@@ -97,6 +97,11 @@ class WhatsAppBot {
             this.qrCodeData = null;
             console.log('\n✅ واتساب جاهز! البوت يراقب المجموعات الآن...');
             console.log(`🌐 API: http://localhost:${config.PORT}\n`);
+            
+            // معالجة الرسائل المعلقة التي وصلت أثناء إيقاف البوت
+            setTimeout(() => {
+                this.processUnreadMessages();
+            }, 3000);
         });
 
         let authLogged = false;
@@ -559,6 +564,59 @@ class WhatsAppBot {
 
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * جلب ومعالجة الرسائل غير المقروءة عند بدء تشغيل البوت لتلافي فترة التوقف
+     */
+    async processUnreadMessages() {
+        try {
+            console.log('🔄 جاري فحص الرسائل غير المقروءة المعلقة أثناء توقف البوت...');
+            const chats = await this.client.getChats();
+            let totalUnread = 0;
+            
+            for (const chat of chats) {
+                if (chat.isGroup && chat.unreadCount > 0) {
+                    const groupId = chat.id._serialized;
+                    const groupName = chat.name || 'Unknown Group';
+
+                    // فحص إذا كانت المجموعة مراقبة
+                    if (this.monitoredGroups !== 'all') {
+                        const groups = Array.isArray(this.monitoredGroups)
+                            ? this.monitoredGroups
+                            : this.monitoredGroups.split(',').map(g => g.trim());
+                        if (!groups.includes(groupId) && !groups.includes(groupName)) continue;
+                    }
+
+                    console.log(`📥 جاري معالجة ${chat.unreadCount} رسائل غير مقروءة من المجموعة: ${groupName}`);
+                    
+                    // جلب الرسائل غير المقروءة
+                    const messages = await chat.fetchMessages({ limit: chat.unreadCount });
+                    for (const msg of messages) {
+                        try {
+                            await this._handleMessage(msg);
+                            totalUnread++;
+                        } catch (msgErr) {
+                            console.error(`❌ خطأ أثناء معالجة رسالة معلقة:`, msgErr.message || msgErr);
+                        }
+                    }
+                    
+                    // وضع علامة مقروءة حتى لا تتكرر المعالجة في التشغيل القادم
+                    try {
+                        await chat.sendSeen();
+                    } catch (e) {
+                        // تجاهل فشل إرسال علامة القراءة
+                    }
+                }
+            }
+            if (totalUnread > 0) {
+                console.log(`✅ تم الانتهاء من معالجة ${totalUnread} رسائل معلقة بنجاح!`);
+            } else {
+                console.log('📝 لا توجد رسائل معلقة غير مقروءة.');
+            }
+        } catch (error) {
+            console.error('❌ خطأ أثناء فحص الرسائل غير المقروءة:', error.message || error);
+        }
     }
 }
 
