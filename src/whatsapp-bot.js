@@ -95,8 +95,13 @@ class WhatsAppBot {
             console.log(`🌐 API: http://localhost:${config.PORT}\n`);
         });
 
+        let authLogged = false;
         this.client.on('authenticated', () => {
-            console.log('✅ تمت المصادقة بنجاح!');
+            if (!authLogged) {
+                console.log('✅ تمت المصادقة بنجاح!');
+                authLogged = true;
+                setTimeout(() => authLogged = false, 5000);
+            }
         });
 
         this.client.on('auth_failure', (msg) => {
@@ -297,7 +302,7 @@ class WhatsAppBot {
             }
 
         } catch (error) {
-            console.error('❌ خطأ في معالجة الرسالة:', error);
+            console.error('❌ خطأ في معالجة الرسالة:', error instanceof Error ? (error.stack || error.message) : error);
             this.stats.errors++;
         }
     }
