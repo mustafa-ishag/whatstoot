@@ -573,6 +573,28 @@ class WhatsAppBot {
         try {
             console.log('🔄 جاري فحص الرسائل غير المقروءة المعلقة أثناء توقف البوت...');
             
+            // الانتظار حتى تكتمل مزامنة المحادثات من خادم واتساب ويب
+            let stats = { total: 0, unread: 0 };
+            for (let i = 0; i < 6; i++) {
+                stats = await this.client.pupPage.evaluate(() => {
+                    const ChatCollection = window.require('WAWebCollections').Chat;
+                    if (!ChatCollection) return { total: 0, unread: 0 };
+                    const chats = ChatCollection.getModelsArray();
+                    const unread = chats.filter(c => c.unreadCount > 0).length;
+                    return { total: chats.length, unread };
+                });
+                
+                console.log(`📊 فحص مزامنة المحادثات (${i + 1}/6): الإجمالي المحمل=${stats.total}, غير المقروءة=${stats.unread}`);
+                
+                if (stats.total > 0) {
+                    // ننتظر 5 ثوانٍ إضافية للتأكد من وصول كافة العدادات والرسائل غير المقروءة بالكامل
+                    console.log('⏳ تم رصد المحادثات. ننتظر 5 ثوانٍ إضافية لاكتمال مزامنة العدادات...');
+                    await this._sleep(5000);
+                    break;
+                }
+                await this._sleep(5000);
+            }
+
             // جلب المجموعات غير المقروءة مباشرة من كود الصفحة دون استخدام getChats() لتفادي أخطاء الواتساب
             const unreadGroups = await this.client.pupPage.evaluate(() => {
                 const ChatCollection = window.require('WAWebCollections').Chat;
