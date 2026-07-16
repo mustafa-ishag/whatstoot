@@ -572,7 +572,21 @@ class WhatsAppBot {
     async processUnreadMessages() {
         try {
             console.log('🔄 جاري فحص الرسائل غير المقروءة المعلقة أثناء توقف البوت...');
-            const chats = await this.client.getChats();
+            
+            let chats;
+            let retries = 5;
+            while (retries > 0) {
+                try {
+                    chats = await this.client.getChats();
+                    break;
+                } catch (e) {
+                    retries--;
+                    if (retries === 0) throw e;
+                    console.log(`⏳ جاري الانتظار لمزامنة المحادثات من السيرفر (محاولات متبقية: ${retries})...`);
+                    await this._sleep(5000);
+                }
+            }
+
             let totalUnread = 0;
             
             for (const chat of chats) {
@@ -615,7 +629,8 @@ class WhatsAppBot {
                 console.log('📝 لا توجد رسائل معلقة غير مقروءة.');
             }
         } catch (error) {
-            console.error('❌ خطأ أثناء فحص الرسائل غير المقروءة:', error.message || error);
+            console.error('❌ خطأ أثناء فحص الرسائل غير المقروءة:');
+            console.error(error instanceof Error ? (error.stack || error.message) : error);
         }
     }
 }
