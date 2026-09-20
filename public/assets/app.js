@@ -39,7 +39,8 @@ async function refreshData() {
         await Promise.all([
             loadStats(),
             loadUploads(),
-            loadBotStatus()
+            loadBotStatus(),
+            loadHealthStatus()
         ]);
     } catch (error) {
         console.error('Refresh error:', error);
@@ -563,12 +564,23 @@ async function openSettingsModal() {
             toggleEmailTargetType();
             document.getElementById('emailTargetNumber').value = currentTarget || '';
         }
-        
+
+        // جلب إعدادات التنبيهات الإدارية
+        try {
+            const alertRes = await fetch(`${API_BASE}/alert/settings`);
+            const alertData = await alertRes.json();
+            if (alertData.success && alertData.alert_email_to) {
+                const alertInput = document.getElementById('alertEmailInput');
+                if (alertInput) alertInput.value = alertData.alert_email_to;
+            }
+        } catch (e) {}
+
     } catch (e) {
         showToast('خطأ في تحميل الإعدادات', 'error');
         console.error(e);
     }
 }
+
 
 function renderGroupOptions(groups, selectedId = '') {
     const groupSelect = document.getElementById('emailTargetGroup');
@@ -656,6 +668,17 @@ async function saveSettings() {
         });
         
         const data = await res.json();
+
+        // حفظ بريد التنبيهات الإدارية
+        const alertEmail = (document.getElementById('alertEmailInput')?.value || '').trim();
+        if (alertEmail) {
+            await fetch(`${API_BASE}/alert/settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: alertEmail })
+            });
+        }
+
         if (data.success) {
             showToast('تم حفظ الإعدادات بنجاح', 'success');
             closeSettingsModal();
@@ -667,6 +690,130 @@ async function saveSettings() {
         console.error(e);
     }
 }
+
+async function testAlertEmail() {
+    const btn = document.getElementById('btnTestAlert');
+    const email = (document.getElementById('alertEmailInput')?.value || '').trim();
+    if (!email || !email.includes('@')) {
+        showToast('يرجى كتابة عنوان بريد إلكتروني صحيح أولاً', 'error');
+        return;
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ جاري الإرسال...';
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/alert/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.message || 'تم إرسال بريد الاختبار بنجاح!', 'success');
+        } else {
+            showToast(data.message || 'فشل إرسال بريد الاختبار', 'error');
+        }
+    } catch (e) {
+        showToast(`خطأ في الإرسال: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '📧 تجربة الإرسال';
+        }
+    }
+}
+
+async function triggerManualBackup() {
+    const btn = document.getElementById('btnManualBackup');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ جاري النسخ...';
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/backup/create`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.message || 'تم إنشاء النسخة الاحتياطية بنجاح!', 'success');
+        } else {
+            showToast(data.message || 'فشل إنشاء النسخة الاحتياطية', 'error');
+        }
+    } catch (e) {
+        showToast(`خطأ: ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 نسخ احتياطي فوري';
+        }
+    }
+}
+
+async function loadHealthStatus() {
+    try {
+        const res = await fetch(`${API_BASE}/health`);
+        const data = await res.json();
+        if (!data.success) return;
+
+        // 1. WhatsApp
+        const dotWa = document.getElementById('dotWhatsApp');
+        const textWa = document.getElementById('healthWhatsAppText');
+        if (dotWa && textWa) {
+            if (data.services.whatsapp.ready) {
+                dotWa.className = 'health-indicator status-online';
+                textWa.textContent = 'متصل وجاهز';
+            } else if (data.services.whatsapp.has_qr) {
+                dotWa.className = 'health-indicator status-warning';
+                textWa.textContent = 'مطلوب مسح QR';
+            } else {
+                dotWa.className = 'health-indicator status-offline';
+                textWa.textContent = 'غير متصل';
+            }
+        }
+
+        // 2. Email Reader
+        const dotEmail = document.getElementById('dotEmail');
+        const textEmail = document.getElementById('healthEmailText');
+        if (dotEmail && textEmail) {
+            if (data.services.email_reader.running) {
+                dotEmail.className = 'health-indicator status-online';
+                textEmail.textContent = 'يعمل (Gmail IMAP)';
+            } else if (data.services.email_reader.enabled) {
+                dotEmail.className = 'health-indicator status-warning';
+                textEmail.textContent = 'متوقف / جاري الاتصال';
+            } else {
+                dotEmail.className = 'health-indicator status-offline';
+                textEmail.textContent = 'معطل';
+            }
+        }
+
+        // 3. Synology
+        const dotSyn = document.getElementById('dotSynology');
+        const textSyn = document.getElementById('healthSynologyText');
+        if (dotSyn && textSyn) {
+            if (data.services.synology.ready) {
+                dotSyn.className = 'health-indicator status-online';
+                textSyn.textContent = 'متصل (QuickConnect)';
+            } else {
+                dotSyn.className = 'health-indicator status-warning';
+                textSyn.textContent = 'جاري التهيئة...';
+            }
+        }
+
+        // 4. Server Resources
+        const textServer = document.getElementById('healthServerText');
+        if (textServer && data.memory) {
+            const uptimeHours = Math.floor(data.uptime_seconds / 3600);
+            const uptimeMins = Math.floor((data.uptime_seconds % 3600) / 60);
+            textServer.textContent = `RAM: ${data.memory.rss_mb} MB | التشغيل: ${uptimeHours}س ${uptimeMins}د`;
+        }
+    } catch (e) {
+        // تجاهل
+    }
+}
+
 
 // =============================================
 // Lightbox (مع التنقل والتدوير والتحميل)

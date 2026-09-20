@@ -120,6 +120,43 @@
     <!-- Main Content -->
     <main class="main">
 
+        <!-- System Health Bar -->
+        <section class="health-bar" id="systemHealthBar">
+            <div class="health-item" id="healthWhatsApp">
+                <span class="health-indicator status-online" id="dotWhatsApp"></span>
+                <div class="health-info">
+                    <span class="health-title">واتساب</span>
+                    <span class="health-desc" id="healthWhatsAppText">متصل وجاهز</span>
+                </div>
+            </div>
+            <div class="health-item" id="healthEmail">
+                <span class="health-indicator status-online" id="dotEmail"></span>
+                <div class="health-info">
+                    <span class="health-title">قارئ البريد</span>
+                    <span class="health-desc" id="healthEmailText">يعمل (Gmail IMAP)</span>
+                </div>
+            </div>
+            <div class="health-item" id="healthSynology">
+                <span class="health-indicator status-online" id="dotSynology"></span>
+                <div class="health-info">
+                    <span class="health-title">تخزين سينولجي</span>
+                    <span class="health-desc" id="healthSynologyText">متصل (QuickConnect)</span>
+                </div>
+            </div>
+            <div class="health-item" id="healthServer">
+                <span class="health-indicator status-online" id="dotServer"></span>
+                <div class="health-info">
+                    <span class="health-title">موارد السيرفر</span>
+                    <span class="health-desc" id="healthServerText">RAM: -- | Uptime: --</span>
+                </div>
+            </div>
+            <div class="health-item" style="justify-content: flex-end;">
+                <button class="btn btn-sm btn-ghost" onclick="triggerManualBackup()" id="btnManualBackup" title="نسخ احتياطي فوري لقاعدة البيانات" style="font-size: 0.8rem; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-secondary);">
+                    💾 نسخ احتياطي فوري
+                </button>
+            </div>
+        </section>
+
         <!-- Stats Cards -->
         <section class="stats-grid" id="statsGrid">
             <div class="stat-card" id="cardTodayUploads">
@@ -321,6 +358,17 @@
                     </select>
                     <small id="groupsStatusNotice" style="color: var(--text-muted); display: block; margin-top: 6px; font-size: 0.8rem;">يتم عرض جميع المجموعات النشطة والمحفوظة</small>
                 </div>
+            </div>
+
+            <!-- قسم تنبيهات البريد الإدارية -->
+            <div style="margin-bottom: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
+                <label style="display: block; margin-bottom: 6px; font-weight: bold; color: var(--text-primary);">🔔 بريد إرسال التنبيهات الإدارية الفورية</label>
+                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 10px;">سيتم إرسال إشعار فوري إلى هذا البريد عند انقطاع واتساب أو طلب مسح رمز QR جديد، أو أخطاء حرجة.</p>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="email" id="alertEmailInput" class="modal-input" placeholder="مثال: name@example.com" style="flex: 1;">
+                    <button class="btn btn-sm" onclick="testAlertEmail()" id="btnTestAlert" type="button" style="background: rgba(59, 130, 246, 0.15); color: var(--blue); border: 1px solid rgba(59, 130, 246, 0.3); padding: 8px 12px; border-radius: 6px; font-weight: bold; white-space: nowrap;">📧 تجربة الإرسال</button>
+                </div>
+                <small id="alertStatusNotice" style="color: var(--text-muted); display: block; margin-top: 6px; font-size: 0.78rem;">خادم الإرسال: Google SMTP (asd86064@gmail.com)</small>
             </div>
             
             <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 25px;">

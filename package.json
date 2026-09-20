@@ -15,9 +15,11 @@
         "googleapis": "^146.0.0",
         "imapflow": "^1.4.3",
         "mailparser": "^3.9.12",
+        "nodemailer": "^10.0.10",
         "pdf-lib": "^1.17.1",
         "qrcode": "^1.5.4",
         "qrcode-terminal": "^0.12.0",
+        "sharp": "^0.35.4",
         "whatsapp-web.js": "github:wwebjs/whatsapp-web.js"
     }
 }

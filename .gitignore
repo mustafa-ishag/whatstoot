@@ -12,8 +12,11 @@ database/bot.sqlite-wal
 # Storage
 storage/temp/*
 storage/logs/*
+storage/backups/*
 !storage/temp/.gitkeep
 !storage/logs/.gitkeep
+!storage/backups/.gitkeep
+
 
 # WhatsApp session
 .wwebjs_auth/

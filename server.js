@@ -107,6 +107,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(config.BASE_PATH, 'public')));
 
 // =============================================
+// =============================================
 // 6. تهيئة WhatsApp Bot
 // =============================================
 const WhatsAppBot = require('./src/whatsapp-bot');
@@ -119,10 +120,33 @@ const EmailReader = require('./src/email-reader');
 const emailReader = new EmailReader(bot, logger, uploader);
 
 // =============================================
-// 8. تسجيل API Routes
+// 8. تهيئة خدمات الصيانة والتنبيهات
+// =============================================
+const AlertService = require('./src/alert-service');
+const alertService = new AlertService(logger);
+bot.setAlertService(alertService);
+
+const TempCleaner = require('./src/temp-cleaner');
+const tempCleaner = new TempCleaner(logger);
+tempCleaner.start();
+
+const BackupService = require('./src/backup-service');
+const backupService = new BackupService(logger);
+backupService.start();
+
+// جدولة تنظيف السجلات القديمة يومياً
+setInterval(() => {
+    const cleaned = db.cleanOldLogs(30);
+    if (cleaned > 0) {
+        logger.info(`Cleaned ${cleaned} old logs from activity_log`);
+    }
+}, 24 * 60 * 60 * 1000);
+
+// =============================================
+// 9. تسجيل API Routes
 // =============================================
 const apiRoutes = require('./src/api-routes');
-apiRoutes.register(app, bot, uploader, logger, emailReader);
+apiRoutes.register(app, bot, uploader, logger, emailReader, alertService, backupService, tempCleaner);
 
 // Dashboard route (fallback)
 app.get('/', (req, res) => {
@@ -130,12 +154,13 @@ app.get('/', (req, res) => {
 });
 
 // =============================================
-// 9. تشغيل Queue Worker
+// 10. تشغيل Queue Worker
 // =============================================
 const QueueWorker = require('./src/queue-worker');
 const worker = new QueueWorker(uploader, logger, (chatId, message) => {
     return bot.sendMessage(chatId, message);
 });
+
 
 // =============================================
 // 9. بدء التشغيل — مع حجز البورت إجبارياً
@@ -255,6 +280,8 @@ async function gracefulShutdown() {
     console.log('\n⏹️ إيقاف البوت وإغلاق المتصفح...');
     try { worker.stop(); } catch(e) {}
     try { emailReader.stop(); } catch(e) {}
+    try { tempCleaner.stop(); } catch(e) {}
+    try { backupService.stop(); } catch(e) {}
     if (bot && bot.client) {
         try {
             await bot.client.destroy();
@@ -264,6 +291,7 @@ async function gracefulShutdown() {
     logger.info('Bot shutting down');
     process.exit(0);
 }
+
 
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);

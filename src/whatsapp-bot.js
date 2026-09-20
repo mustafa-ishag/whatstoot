@@ -91,13 +91,23 @@ class WhatsAppBot extends EventEmitter {
             console.log(`\n⏳ جاري تحميل واتساب ويب... ${percent}%`);
         });
 
-        this.client.on('qr', (qr) => {
+        this.client.on('qr', async (qr) => {
             this.qrCodeData = qr;
             this.emit('qr', { qr });
             console.log('\n==================================================');
             console.log('📌 امسح هذا الباركود (QR Code) بجوالك:');
             console.log('==================================================\n');
             qrcode.generate(qr, { small: true });
+
+            if (this.alertService) {
+                try {
+                    const qrcodeLib = require('qrcode');
+                    const qrDataUrl = await qrcodeLib.toDataURL(qr);
+                    this.alertService.sendQrAlert(qrDataUrl).catch(() => {});
+                } catch (e) {
+                    this.alertService.sendQrAlert().catch(() => {});
+                }
+            }
         });
 
         this.client.on('ready', async () => {
@@ -134,6 +144,10 @@ class WhatsAppBot extends EventEmitter {
             this.emit('status', { ready: false, reason });
             console.log('⚠️ تم قطع الاتصال:', reason);
             
+            if (this.alertService && !this.manualDisconnect) {
+                this.alertService.sendDisconnectAlert(reason).catch(() => {});
+            }
+
             if (this.manualDisconnect) {
                 console.log('🛑 قطع اتصال يدوي — لن يتم محاولة إعادة الاتصال هنا.');
                 return;
@@ -152,6 +166,11 @@ class WhatsAppBot extends EventEmitter {
 
         this.client.on('message_create', (msg) => this._handleMessage(msg));
     }
+
+    setAlertService(alertService) {
+        this.alertService = alertService;
+    }
+
 
     /**
      * إزالة ملفات قفل Chromium القديمة لتفادي تعليق Puppeteer بعد إعادة التشغيل

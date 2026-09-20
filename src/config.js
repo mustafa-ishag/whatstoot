@@ -86,6 +86,16 @@ const EMAIL_CHECK_INTERVAL = envInt('EMAIL_CHECK_INTERVAL', 60);
 const EMAIL_WHATSAPP_NUMBER = env('EMAIL_WHATSAPP_NUMBER', '0537266407');
 const EMAIL_ENABLED = envBool('EMAIL_ENABLED', false);
 
+// =============================================
+// Admin Email Alert Settings
+// =============================================
+const ALERT_SMTP_HOST = env('ALERT_SMTP_HOST', 'smtp.gmail.com');
+const ALERT_SMTP_PORT = envInt('ALERT_SMTP_PORT', 587);
+const ALERT_SMTP_USER = env('ALERT_SMTP_USER', 'asd86064@gmail.com');
+const ALERT_SMTP_PASS = env('ALERT_SMTP_PASS', 'tqxrbosjrlabhcbt');
+const ALERT_EMAIL_TO = env('ALERT_EMAIL_TO', 'musta.ishag@gmail.com');
+const ALERT_ENABLED = envBool('ALERT_ENABLED', true);
+
 module.exports = {
     // Paths
     BASE_PATH, STORAGE_PATH, TEMP_PATH, LOGS_PATH, DB_PATH, CREDENTIALS_PATH,
@@ -104,4 +114,8 @@ module.exports = {
     // Email
     EMAIL_IMAP_HOST, EMAIL_IMAP_PORT, EMAIL_USER, EMAIL_PASS,
     EMAIL_CHECK_INTERVAL, EMAIL_WHATSAPP_NUMBER, EMAIL_ENABLED,
+    // Alerts
+    ALERT_SMTP_HOST, ALERT_SMTP_PORT, ALERT_SMTP_USER, ALERT_SMTP_PASS,
+    ALERT_EMAIL_TO, ALERT_ENABLED,
 };
+

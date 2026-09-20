@@ -177,20 +177,45 @@ function renderWorkOrders(orders) {
     });
 }
 
-// ── البحث في أوامر العمل ──
+// ── البحث والتصفية في أوامر العمل ──
 let searchTimeout = null;
+let currentDateFilter = 'all';
+
+function filterByDate(range, btn) {
+    currentDateFilter = range || 'all';
+    document.querySelectorAll('.date-filter-btn').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+
+    applyFilters();
+}
+
 function handleSearch(query) {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
-        const q = (query || '').trim().toLowerCase();
-        if (!q) {
-            renderWorkOrders(allWorkOrders);
-            return;
-        }
-        const filtered = allWorkOrders.filter(wo => String(wo.work_order).toLowerCase().includes(q));
-        renderWorkOrders(filtered);
+        applyFilters();
     }, 200);
 }
+
+function applyFilters() {
+    let filtered = [...allWorkOrders];
+    const now = new Date();
+
+    if (currentDateFilter === 'today') {
+        const todayStr = now.toISOString().slice(0, 10);
+        filtered = filtered.filter(wo => wo.last_activity && wo.last_activity.startsWith(todayStr));
+    } else if (currentDateFilter === 'week') {
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        filtered = filtered.filter(wo => wo.last_activity && new Date(wo.last_activity) >= weekAgo);
+    }
+
+    const q = (document.getElementById('woSearchInput')?.value || '').trim().toLowerCase();
+    if (q) {
+        filtered = filtered.filter(wo => String(wo.work_order).toLowerCase().includes(q));
+    }
+
+    renderWorkOrders(filtered);
+}
+
 
 // ── فتح مجلد أمر العمل ──
 async function openWorkOrder(wo) {

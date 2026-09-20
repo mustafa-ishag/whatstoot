@@ -255,6 +255,8 @@ function setSetting(key, value) {
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
 }
 
+const saveSetting = setSetting;
+
 function getAllSettings() {
     const db = getInstance();
     const rows = db.prepare('SELECT key, value FROM settings').all();
@@ -264,6 +266,21 @@ function getAllSettings() {
     }
     return settings;
 }
+
+function cleanOldLogs(days = 30) {
+    const db = getInstance();
+    try {
+        const res = db.prepare(`
+            DELETE FROM activity_log 
+            WHERE created_at < datetime('now', '-' || ? || ' days')
+        `).run(days);
+        return res.changes;
+    } catch (e) {
+        console.error('Error cleaning old logs:', e.message);
+        return 0;
+    }
+}
+
 
 // =============================================
 // 📊 Statistics
@@ -526,7 +543,9 @@ module.exports = {
     // Queue
     enqueue, getExpiredQueue, getWaitingImages, updateQueueStatus, incrementQueueAttempts, getProcessingQueue,
     // Settings
-    getSetting, setSetting, getAllSettings,
+    getSetting, setSetting, saveSetting, getAllSettings,
+    // Maintenance
+    cleanOldLogs,
     // Stats
     getStats,
     // Duplicate

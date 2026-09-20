@@ -37,8 +37,13 @@ function getThumbCachePath(driveId, size) {
  * @param {import('./whatsapp-bot')} bot
  * @param {*} uploader
  * @param {import('./logger')} logger
+ * @param {import('./email-reader')} emailReader
+ * @param {import('./alert-service')} alertService
+ * @param {import('./backup-service')} backupService
+ * @param {import('./temp-cleaner')} tempCleaner
  */
-function register(app, bot, uploader, logger, emailReader) {
+function register(app, bot, uploader, logger, emailReader, alertService = null, backupService = null, tempCleaner = null) {
+
 
     // =============================================
     // 🔒 وسيط التحقق من الصلاحيات (Security Middleware)
@@ -132,10 +137,123 @@ function register(app, bot, uploader, logger, emailReader) {
     });
 
     // =============================================
+    // 🩺 مؤشر صحة النظام الشامل
+    // GET /api/health
+    // =============================================
+    app.get('/api/health', (req, res) => {
+        try {
+            const mem = process.memoryUsage();
+            const uptimeSeconds = Math.floor(process.uptime());
+
+            res.json({
+                success: true,
+                status: 'online',
+                uptime_seconds: uptimeSeconds,
+                memory: {
+                    rss_mb: (mem.rss / (1024 * 1024)).toFixed(1),
+                    heap_used_mb: (mem.heapUsed / (1024 * 1024)).toFixed(1),
+                    heap_total_mb: (mem.heapTotal / (1024 * 1024)).toFixed(1),
+                },
+                services: {
+                    whatsapp: {
+                        ready: !!(bot && bot.isClientReady),
+                        has_qr: !!(bot && bot.qrCodeData),
+                    },
+                    email_reader: {
+                        enabled: config.EMAIL_ENABLED,
+                        running: !!(emailReader && emailReader.isRunning),
+                    },
+                    synology: {
+                        engine: config.STORAGE_ENGINE,
+                        ready: !!(uploader && uploader.initialized),
+                    },
+                    alerts: {
+                        enabled: config.ALERT_ENABLED,
+                        recipient: alertService ? alertService.getRecipientEmail() : (db.getSetting('alert_email_to') || config.ALERT_EMAIL_TO),
+                    }
+                }
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
+    // 📧 إعدادات واختبار التنبيهات الإدارية
+    // GET  /api/alert/settings
+    // POST /api/alert/settings
+    // POST /api/alert/test
+    // =============================================
+    app.get('/api/alert/settings', (req, res) => {
+        try {
+            const email = alertService ? alertService.getRecipientEmail() : (db.getSetting('alert_email_to') || config.ALERT_EMAIL_TO);
+            res.json({
+                success: true,
+                alert_email_to: email,
+                alert_enabled: config.ALERT_ENABLED,
+                smtp_host: config.ALERT_SMTP_HOST,
+                smtp_user: config.ALERT_SMTP_USER,
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    app.post('/api/alert/settings', (req, res) => {
+        try {
+            const { email } = req.body || {};
+            if (!email || !email.includes('@')) {
+                return res.status(400).json({ success: false, message: 'عنوان البريد الإلكتروني غير صحيح' });
+            }
+            db.saveSetting('alert_email_to', email.trim());
+            if (alertService) {
+                alertService.setRecipientEmail(email.trim());
+            }
+            res.json({ success: true, message: 'تم حفظ بريد التنبيهات بنجاح', alert_email_to: email.trim() });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    app.post('/api/alert/test', async (req, res) => {
+        try {
+            const { email } = req.body || {};
+            if (!alertService) {
+                return res.status(500).json({ success: false, message: 'خدمة التنبيهات غير متوفرة' });
+            }
+            const result = await alertService.sendTestAlert(email);
+            if (result.success) {
+                res.json({ success: true, message: `تم إرسال بريد الاختبار بنجاح إلى ${email || alertService.getRecipientEmail()}` });
+            } else {
+                res.status(500).json({ success: false, message: `فشل إرسال بريد الاختبار: ${result.message}` });
+            }
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
+    // 💾 النسخ الاحتياطي اليدوي لقاعدة البيانات
+    // POST /api/backup/create
+    // =============================================
+    app.post('/api/backup/create', async (req, res) => {
+        try {
+            if (!backupService) {
+                return res.status(500).json({ success: false, message: 'خدمة النسخ الاحتياطي غير متوفرة' });
+            }
+            const result = await backupService.createBackupNow();
+            res.json(result);
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
     // 📤 قائمة الرفعات
     // GET /api/uploads?wo=123&status=completed&limit=50&offset=0
     // =============================================
     app.get('/api/uploads', (req, res) => {
+
         try {
             const woFilter = req.query.wo || null;
             const status = req.query.status || null;
