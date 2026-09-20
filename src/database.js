@@ -441,6 +441,79 @@ function getUploadsForExport(woFilter = null, status = null) {
     return db.prepare(sql).all(...params);
 }
 
+// =============================================
+// 📁 Work Orders Explorer
+// =============================================
+
+function getWorkOrdersSummary(search = null, limit = 100, offset = 0) {
+    const db = getInstance();
+    let sql = `
+        SELECT 
+            work_order,
+            COUNT(*) AS file_count,
+            MAX(uploaded_at) AS last_activity,
+            MIN(uploaded_at) AS first_activity,
+            (SELECT id FROM uploads u2 WHERE u2.work_order = uploads.work_order AND u2.drive_id IS NOT NULL ORDER BY u2.id DESC LIMIT 1) AS preview_upload_id,
+            (SELECT file_name FROM uploads u3 WHERE u3.work_order = uploads.work_order AND u3.drive_id IS NOT NULL ORDER BY u3.id DESC LIMIT 1) AS preview_file_name
+        FROM uploads
+        WHERE work_order IS NOT NULL AND work_order != ''
+    `;
+    const params = [];
+
+    if (search) {
+        sql += ` AND work_order LIKE ?`;
+        params.push(`%${search}%`);
+    }
+
+    sql += ` GROUP BY work_order ORDER BY last_activity DESC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    return db.prepare(sql).all(...params);
+}
+
+function getFilesByWorkOrder(workOrder) {
+    const db = getInstance();
+    return db.prepare(`
+        SELECT id, work_order, file_name, file_hash, drive_id, drive_url, group_id, group_name, sender, caption, status, uploaded_at
+        FROM uploads
+        WHERE work_order = ?
+        ORDER BY uploaded_at DESC
+    `).all(workOrder);
+}
+
+function moveSelectedUploads(uploadIds, targetWorkOrder, newDriveIdsMap = {}) {
+    const db = getInstance();
+    if (!Array.isArray(uploadIds) || uploadIds.length === 0) return 0;
+
+    const updateStmt = db.prepare(`
+        UPDATE uploads 
+        SET work_order = ?, drive_id = COALESCE(?, drive_id)
+        WHERE id = ?
+    `);
+
+    const updateMany = db.transaction((ids) => {
+        let count = 0;
+        for (const id of ids) {
+            const newDriveId = newDriveIdsMap[id] || null;
+            const res = updateStmt.run(targetWorkOrder, newDriveId, id);
+            count += res.changes;
+        }
+        return count;
+    });
+
+    return updateMany(uploadIds);
+}
+
+function moveAllUploadsOfWorkOrder(fromWorkOrder, targetWorkOrder) {
+    const db = getInstance();
+    const res = db.prepare(`
+        UPDATE uploads 
+        SET work_order = ?
+        WHERE work_order = ?
+    `).run(targetWorkOrder, fromWorkOrder);
+    return res.changes;
+}
+
 module.exports = {
     getInstance,
     applySchema,
@@ -463,4 +536,6 @@ module.exports = {
     resetWorkOrder, getUploadsForMove, updateUploadWorkOrder,
     // Groups
     saveGroup, getAllCachedGroups, syncGroupsFromUploads,
+    // Work Orders Explorer
+    getWorkOrdersSummary, getFilesByWorkOrder, moveSelectedUploads, moveAllUploadsOfWorkOrder,
 };

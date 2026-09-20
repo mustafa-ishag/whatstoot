@@ -8,6 +8,7 @@
         "dev": "node --watch server.js"
     },
     "dependencies": {
+        "archiver": "^7.0.1",
         "better-sqlite3": "^11.8.1",
         "dotenv": "^16.5.0",
         "express": "^5.2.1",

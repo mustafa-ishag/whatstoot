@@ -494,6 +494,106 @@ class SynologyUploader {
     }
 
     /**
+     * جلب قائمة مجلدات أوامر العمل مباشرة من Synology
+     * @returns {Promise<Array<{name: string, path: string, time: number}>>}
+     */
+    async listWorkOrderFolders() {
+        await this.ensureInitialized();
+
+        try {
+            const response = await this.apiRequest('/webapi/entry.cgi', {
+                api: 'SYNO.FileStation.List',
+                version: 2,
+                method: 'list',
+                folder_path: this.basePath,
+                additional: 'time,size',
+                _sid: this.sid,
+            });
+
+            if (!response.success) {
+                if (response.error?.code == 119) {
+                    await this.reLogin();
+                    return this.listWorkOrderFolders();
+                }
+                throw new Error(`Failed to list folders on Synology (error code: ${response.error?.code})`);
+            }
+
+            const items = response.data?.files || [];
+            return items
+                .filter(item => item.isdir)
+                .map(item => ({
+                    name: item.name,
+                    path: item.path,
+                    time: item.additional?.time?.mtime || 0,
+                }));
+        } catch (e) {
+            this.logger.warning(`Failed to list work order folders: ${e.message}`);
+            return [];
+        }
+    }
+
+    /**
+     * جلب قائمة الملفات داخل مجلد أمر عمل (يدعم المجلدات الفرعية)
+     * @param {string} folderPath المسار الكامل للمجلد (أو رقم أمر العمل)
+     * @returns {Promise<Array<{name: string, path: string, isdir: boolean, size: number, time: number}>>}
+     */
+    async listFiles(folderPath) {
+        await this.ensureInitialized();
+
+        // إذا تم تمرير رقم أمر العمل فقط وليس مساراً كاملاً
+        if (!folderPath.startsWith('/')) {
+            folderPath = `${this.basePath}/${folderPath}`;
+        }
+
+        try {
+            const response = await this.apiRequest('/webapi/entry.cgi', {
+                api: 'SYNO.FileStation.List',
+                version: 2,
+                method: 'list',
+                folder_path: folderPath,
+                additional: 'size,time,real_path',
+                _sid: this.sid,
+            });
+
+            if (!response.success) {
+                if (response.error?.code == 119) {
+                    await this.reLogin();
+                    return this.listFiles(folderPath);
+                }
+                throw new Error(`Failed to list files on Synology (error code: ${response.error?.code})`);
+            }
+
+            const items = response.data?.files || [];
+            const result = [];
+
+            for (const item of items) {
+                if (item.isdir) {
+                    // فحص المجلد الفرعي أيضاً (مثل اسم المجموعة أو المرسل)
+                    try {
+                        const subFiles = await this.listFiles(item.path);
+                        result.push(...subFiles);
+                    } catch (subErr) {
+                        // تجاهل إن تعذر فتح المجلد الفرعي
+                    }
+                } else {
+                    result.push({
+                        name: item.name,
+                        path: item.path,
+                        isdir: false,
+                        size: item.additional?.size || 0,
+                        time: item.additional?.time?.mtime || 0,
+                    });
+                }
+            }
+
+            return result;
+        } catch (e) {
+            this.logger.warning(`Failed to list files for folder ${folderPath}: ${e.message}`);
+            return [];
+        }
+    }
+
+    /**
      * التأكد من تهيئة الاتصال
      */
     async ensureInitialized() {

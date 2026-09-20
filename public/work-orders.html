@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsToot — مستعرض أوامر العمل (Synology)</title>
+    <meta name="description" content="استعراض وإدارة صور أوامر العمل المخزنة على سينولجي NAS بسرعة فائقة">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/style.css?v=8">
+    <style>
+        /* أنماط مستعرض أوامر العمل المتقدم */
+        .wo-explorer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .wo-search-box {
+            display: flex;
+            align-items: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 4px 12px;
+            width: 320px;
+            max-width: 100%;
+            transition: var(--transition);
+        }
+        .wo-search-box:focus-within {
+            border-color: var(--blue);
+            box-shadow: 0 0 0 3px rgba(66, 133, 244, 0.2);
+        }
+        .wo-search-box input {
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            padding: 8px;
+            width: 100%;
+            font-size: 0.95rem;
+            outline: none;
+            font-family: inherit;
+        }
+
+        /* شبكة أوامر العمل */
+        .wo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .wo-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .wo-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--blue);
+            box-shadow: var(--shadow-lg);
+            background: var(--bg-card-hover);
+        }
+        .wo-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            left: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--blue), var(--purple));
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        .wo-card:hover::before {
+            opacity: 1;
+        }
+
+        .wo-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+        .wo-number {
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .wo-badge {
+            background: var(--blue-soft);
+            color: var(--blue);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+
+        .wo-card-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+        .wo-meta-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .wo-card-preview {
+            height: 120px;
+            background: var(--bg-input);
+            border-radius: var(--radius);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 14px;
+            border: 1px solid var(--border);
+        }
+        .wo-card-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+        }
+        .wo-card:hover .wo-card-preview img {
+            transform: scale(1.05);
+        }
+
+        /* عرض مجلد أمر العمل الفردي */
+        .wo-detail-view {
+            display: none;
+        }
+        .wo-detail-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 16px 20px;
+            border-radius: var(--radius-lg);
+            margin-bottom: 24px;
+        }
+
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .gallery-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            position: relative;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+        }
+        .gallery-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow);
+            border-color: var(--blue);
+        }
+        .gallery-card.selected {
+            border-color: var(--green);
+            box-shadow: 0 0 0 2px var(--green);
+        }
+
+        .gallery-thumb-wrap {
+            position: relative;
+            width: 100%;
+            padding-top: 80%; /* 4:3 Aspect Ratio */
+            background: var(--bg-input);
+            cursor: pointer;
+            overflow: hidden;
+        }
+        .gallery-thumb-wrap img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+        }
+        .gallery-thumb-wrap:hover img {
+            transform: scale(1.04);
+        }
+
+        .gallery-checkbox {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            background: rgba(0,0,0,0.6);
+            border: 2px solid #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            transition: var(--transition);
+        }
+        .gallery-checkbox.checked {
+            background: var(--green);
+            border-color: var(--green);
+        }
+        .gallery-checkbox.checked::after {
+            content: '✓';
+            color: #fff;
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .gallery-info {
+            padding: 10px 12px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .gallery-filename {
+            font-weight: 700;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gallery-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 12px 10px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* شريط الإجراءات العائم للملفات المحددة */
+        .floating-action-bar {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%) translateY(120px);
+            background: var(--bg-card);
+            border: 1px solid var(--border-hover);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            border-radius: 40px;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            z-index: 900;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .floating-action-bar.active {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* نافذة النقل Modal */
+        .wo-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        .wo-modal.active {
+            display: flex;
+        }
+        .wo-modal-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 480px;
+            max-width: 100%;
+            padding: 24px;
+            box-shadow: var(--shadow-lg);
+        }
+
+        /* Lightbox فائق السرعة */
+        .fast-lightbox {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.92);
+            backdrop-filter: blur(10px);
+            display: none;
+            flex-direction: column;
+            z-index: 1100;
+        }
+        .fast-lightbox.active {
+            display: flex;
+        }
+        .lightbox-topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 24px;
+            color: #fff;
+            background: rgba(0,0,0,0.4);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .lightbox-stage {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            padding: 20px;
+        }
+        .lightbox-stage img {
+            max-width: 95%;
+            max-height: 85vh;
+            object-fit: contain;
+            border-radius: var(--radius);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            transition: transform 0.2s ease;
+        }
+        .lightbox-nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            border: none;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+        .lightbox-nav-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        .lightbox-prev { right: 24px; }
+        .lightbox-next { left: 24px; }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header" id="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon" style="background: linear-gradient(135deg, var(--blue), var(--purple));">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1>مستعرض أوامر العمل</h1>
+                    <p class="subtitle">Synology FileStation &amp; Cloud Storage</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <a href="index.html" class="btn btn-sm" style="background: rgba(255, 255, 255, 0.08); color: var(--text-primary); text-decoration: none; padding: 6px 14px; border-radius: 6px; font-weight: bold;">← لوحة التحكم</a>
+                <button class="btn btn-sm" onclick="syncSynology()" style="background: rgba(66, 133, 244, 0.15); color: var(--blue); border: 1px solid rgba(66, 133, 244, 0.3); padding: 6px 14px; border-radius: 6px; font-weight: bold;" id="syncBtn">🔄 تحديث من سينولجي</button>
+                <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="تبديل الوضع">🌙</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="main">
+
+        <!-- VIEW 1: All Work Orders Grid -->
+        <div id="viewWorkOrdersList">
+            <div class="wo-explorer-header">
+                <div>
+                    <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary); margin-bottom: 4px;">مجلدات أوامر العمل</h2>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary);">استعراض كافة المجلدات المخزنة على سينولجي مع سرعة تحميل واستعراض فائقة</p>
+                </div>
+                <div class="wo-search-box">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="woSearchInput" placeholder="بحث برقم أمر العمل..." oninput="handleSearch(this.value)">
+                </div>
+            </div>
+
+            <!-- Loading Spinner -->
+            <div id="woListLoading" style="text-align: center; padding: 50px 0;">
+                <div class="spinner" style="width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px;"></div>
+                <p style="color: var(--text-secondary);">جاري فحص مجلدات سينولجي وقاعدة البيانات...</p>
+            </div>
+
+            <!-- Empty State -->
+            <div id="woListEmpty" style="display: none; text-align: center; padding: 60px 20px; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border);">
+                <span style="font-size: 3rem; display: block; margin-bottom: 12px;">📂</span>
+                <h3 style="color: var(--text-primary); margin-bottom: 6px;">لا توجد مجلدات أوامر عمل</h3>
+                <p style="color: var(--text-secondary);">لم يتم العثور على أي أوامر عمل مسجلة أو مطابقة للبحث</p>
+            </div>
+
+            <!-- Grid -->
+            <div class="wo-grid" id="woGrid"></div>
+        </div>
+
+        <!-- VIEW 2: Work Order Detail (Gallery) -->
+        <div id="viewWorkOrderDetail" class="wo-detail-view">
+            <div class="wo-detail-bar">
+                <div>
+                    <button class="btn btn-sm" onclick="backToList()" style="background: rgba(255,255,255,0.08); color: var(--text-primary); margin-bottom: 8px; border-radius: 6px; padding: 4px 10px; font-weight: bold;">← رجوع للقائمة</button>
+                    <h2 id="currentWoTitle" style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 10px;">
+                        <span>📁 أمر عمل:</span>
+                        <span id="currentWoNumber" style="color: var(--blue);"></span>
+                        <span id="currentWoCountBadge" class="wo-badge">0 صورة</span>
+                    </h2>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-sm" onclick="toggleSelectAll()" id="btnSelectAll" style="background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font-weight: bold;">☑️ تحديد الكل</button>
+                    <button class="btn btn-sm" onclick="downloadAllZip()" style="background: rgba(37, 211, 102, 0.15); color: #25D366; border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 6px; padding: 6px 16px; font-weight: bold;" id="btnDownloadAllZip">📥 تحميل الكل (ZIP)</button>
+                    <button class="btn btn-sm" onclick="openMoveModal(true)" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 6px; padding: 6px 14px; font-weight: bold;">📦 نقل كل الصور</button>
+                </div>
+            </div>
+
+            <!-- Gallery Loading -->
+            <div id="galleryLoading" style="text-align: center; padding: 50px 0;">
+                <div class="spinner" style="width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--green); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px;"></div>
+                <p style="color: var(--text-secondary);">جاري استعراض صور أمر العمل بسرعة فائقة...</p>
+            </div>
+
+            <!-- Gallery Empty -->
+            <div id="galleryEmpty" style="display: none; text-align: center; padding: 60px 20px; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border);">
+                <span style="font-size: 3rem; display: block; margin-bottom: 12px;">📷</span>
+                <h3 style="color: var(--text-primary); margin-bottom: 6px;">لا توجد صور في هذا المجلد</h3>
+                <p style="color: var(--text-secondary);">لم يتم رفع أي صور لأمر العمل هذا بعد</p>
+            </div>
+
+            <!-- Gallery Grid -->
+            <div class="gallery-grid" id="galleryGrid"></div>
+        </div>
+
+    </main>
+
+    <!-- Floating Action Bar for Selected Images -->
+    <div class="floating-action-bar" id="floatingActionBar">
+        <span id="selectedCountText" style="font-weight: 700; color: var(--text-primary);">تم تحديد 0 صورة</span>
+        <button class="btn btn-sm" onclick="downloadSelectedZip()" style="background: #25D366; color: #fff; border: none; padding: 6px 16px; border-radius: 20px; font-weight: bold;">📥 تحميل المحددة</button>
+        <button class="btn btn-sm" onclick="openMoveModal(false)" style="background: #8b5cf6; color: #fff; border: none; padding: 6px 16px; border-radius: 20px; font-weight: bold;">📦 نقل المحددة</button>
+        <button class="btn btn-sm btn-ghost" onclick="clearSelection()" style="color: var(--text-secondary);">إلغاء التحديد</button>
+    </div>
+
+    <!-- Move Images Modal -->
+    <div class="wo-modal" id="moveModal">
+        <div class="wo-modal-content">
+            <h3 style="color: var(--text-primary); font-size: 1.25rem; font-weight: 800; margin-bottom: 12px;" id="moveModalTitle">📦 نقل الصور إلى أمر عمل آخر</h3>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 16px;" id="moveModalDesc">سيتم نقل الصور المحددة في سينولجي وتحديث قاعدة البيانات فورياً.</p>
+            
+            <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 0.85rem; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">رقم أمر العمل الجديد (الهدف):</label>
+                <input type="text" id="targetWoInput" placeholder="أدخل رقم أمر العمل الجديد..." style="width: 100%; padding: 10px 14px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-primary); outline: none; font-size: 1rem; font-family: inherit;">
+            </div>
+
+            <div id="moveProgress" style="display: none; margin-bottom: 14px; text-align: center;">
+                <div class="spinner" style="width: 24px; height: 24px; border: 2px solid var(--border); border-top-color: #8b5cf6; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 8px;"></div>
+                <p style="color: var(--text-secondary); font-size: 0.85rem;">جاري النقل على سينولجي وتحديث البيانات...</p>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button class="btn btn-sm btn-ghost" onclick="closeMoveModal()" id="btnCancelMove">إلغاء</button>
+                <button class="btn btn-sm" onclick="executeMove()" style="background: #8b5cf6; color: #fff; border: none; padding: 8px 18px; border-radius: 6px; font-weight: bold;" id="btnConfirmMove">تأكيد النقل</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fast Lightbox -->
+    <div class="fast-lightbox" id="fastLightbox">
+        <div class="lightbox-topbar">
+            <div>
+                <span id="lbFileName" style="font-weight: 700; font-size: 1rem;"></span>
+                <span id="lbCounter" style="opacity: 0.7; font-size: 0.85rem; margin-right: 10px;"></span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="btn btn-sm" onclick="rotateLightbox()" title="تدوير" style="background: rgba(255,255,255,0.1); color: #fff; border: none; border-radius: 6px; padding: 6px 10px;">🔄 تدوير</button>
+                <button class="btn btn-sm" onclick="downloadCurrentLightboxImage()" title="تحميل" style="background: rgba(37, 211, 102, 0.2); color: #25D366; border: 1px solid rgba(37, 211, 102, 0.4); border-radius: 6px; padding: 6px 14px; font-weight: bold;">⬇️ تحميل</button>
+                <button class="btn btn-sm" onclick="closeLightbox()" title="إغلاق" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; padding: 6px 12px; font-weight: bold;">✕</button>
+            </div>
+        </div>
+        <div class="lightbox-stage" onclick="handleLightboxClick(event)">
+            <button class="lightbox-nav-btn lightbox-prev" onclick="prevImage(event)" title="السابق (سهم يمين)">&#10095;</button>
+            <img id="lbImage" src="" alt="" style="transform: rotate(0deg);">
+            <button class="lightbox-nav-btn lightbox-next" onclick="nextImage(event)" title="التالي (سهم يسار)">&#10094;</button>
+        </div>
+    </div>
+
+    <script src="assets/work-orders.js?v=2"></script>
+</body>
+</html>

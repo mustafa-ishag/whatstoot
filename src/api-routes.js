@@ -12,9 +12,24 @@
 
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const archiver = require('archiver');
 const db = require('./database');
 const config = require('./config');
 const QRCode = require('qrcode');
+
+const THUMB_CACHE_DIR = path.join(config.BASE_PATH, 'cache', 'thumbnails');
+if (!fs.existsSync(THUMB_CACHE_DIR)) {
+    try {
+        fs.mkdirSync(THUMB_CACHE_DIR, { recursive: true });
+    } catch (e) {}
+}
+
+function getThumbCachePath(driveId, size) {
+    const hash = crypto.createHash('md5').update(`${driveId}_${size}`).digest('hex');
+    return path.join(THUMB_CACHE_DIR, `${hash}.jpg`);
+}
 
 /**
  * تسجيل API routes
@@ -549,7 +564,157 @@ function register(app, bot, uploader, logger, emailReader) {
     });
 
     // =============================================
-    // 🖼 استعراض صورة مصغّرة
+    // 📁 مستعرض أوامر العمل (Work Orders Explorer)
+    // GET /api/work-orders?search=...&limit=100&offset=0&sync=1
+    // =============================================
+    let cachedSynologyFolders = null;
+    let lastSynologySync = 0;
+
+    app.get('/api/work-orders', async (req, res) => {
+        try {
+            const search = req.query.search || null;
+            const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+            const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+            const forceSync = req.query.sync === '1' || req.query.sync === 'true';
+
+            // 1. أوامر العمل المسجلة في قاعدة البيانات (فورية)
+            const dbOrders = db.getWorkOrdersSummary(search, limit, offset);
+
+            // 2. فحص سينولجي إذا كان متاحاً ومزامنة المجلدات
+            let synologyOrders = [];
+            const now = Date.now();
+            if (uploader && uploader.listWorkOrderFolders && (forceSync || !cachedSynologyFolders || (now - lastSynologySync > 60000))) {
+                try {
+                    cachedSynologyFolders = await uploader.listWorkOrderFolders();
+                    lastSynologySync = now;
+                } catch (e) {
+                    logger.warning(`Failed to sync folders from Synology: ${e.message}`);
+                }
+            }
+
+            if (cachedSynologyFolders && Array.isArray(cachedSynologyFolders)) {
+                synologyOrders = cachedSynologyFolders;
+            }
+
+            // دمج القائمتين لضمان ظهور كل أمر عمل سواء في قاعدة البيانات أو سينولجي
+            const orderMap = new Map();
+            for (const item of dbOrders) {
+                orderMap.set(String(item.work_order), {
+                    work_order: String(item.work_order),
+                    file_count: item.file_count || 0,
+                    last_activity: item.last_activity || null,
+                    first_activity: item.first_activity || null,
+                    preview_upload_id: item.preview_upload_id || null,
+                    preview_file_name: item.preview_file_name || null,
+                    source: 'database',
+                });
+            }
+
+            for (const sItem of synologyOrders) {
+                const woName = sItem.name;
+                if (search && !woName.includes(search)) continue;
+
+                if (orderMap.has(woName)) {
+                    const existing = orderMap.get(woName);
+                    existing.source = 'both';
+                    existing.nas_path = sItem.path;
+                } else {
+                    orderMap.set(woName, {
+                        work_order: woName,
+                        file_count: 0,
+                        last_activity: sItem.time ? new Date(sItem.time * 1000).toISOString().replace('T', ' ').substring(0, 19) : null,
+                        first_activity: null,
+                        preview_upload_id: null,
+                        preview_file_name: null,
+                        nas_path: sItem.path,
+                        source: 'synology',
+                    });
+                }
+            }
+
+            const allOrders = Array.from(orderMap.values());
+            allOrders.sort((a, b) => {
+                const tA = a.last_activity ? new Date(a.last_activity).getTime() : 0;
+                const tB = b.last_activity ? new Date(b.last_activity).getTime() : 0;
+                return tB - tA;
+            });
+
+            res.json({
+                success: true,
+                work_orders: allOrders.slice(offset, offset + limit),
+                total: allOrders.length,
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
+    // 📂 ملفات أمر عمل محدد
+    // GET /api/work-orders/:wo
+    // =============================================
+    app.get('/api/work-orders/:wo', async (req, res) => {
+        try {
+            const wo = req.params.wo;
+            if (!wo) return res.status(400).json({ success: false, message: 'Work order required' });
+
+            const dbFiles = db.getFilesByWorkOrder(wo);
+            const fileMap = new Map();
+
+            for (const f of dbFiles) {
+                fileMap.set(f.file_name, {
+                    id: f.id,
+                    file_name: f.file_name,
+                    drive_id: f.drive_id,
+                    thumb_url: `/api/image-thumb/${f.id}`,
+                    full_url: `/api/image-full/${f.id}`,
+                    download_url: `/api/synology/download?path=${encodeURIComponent(f.drive_id || '')}&name=${encodeURIComponent(f.file_name)}`,
+                    group_name: f.group_name,
+                    sender: f.sender,
+                    caption: f.caption,
+                    uploaded_at: f.uploaded_at,
+                    source: 'database',
+                });
+            }
+
+            // فحص سينولجي إذا لم تكن هناك سجلات أو لملفات إضافية
+            if (uploader && uploader.listFiles) {
+                try {
+                    const nasFiles = await uploader.listFiles(wo);
+                    for (const nf of nasFiles) {
+                        if (!fileMap.has(nf.name)) {
+                            fileMap.set(nf.name, {
+                                id: null,
+                                file_name: nf.name,
+                                drive_id: nf.path,
+                                thumb_url: `/api/synology/thumb?path=${encodeURIComponent(nf.path)}`,
+                                full_url: `/api/synology/full?path=${encodeURIComponent(nf.path)}`,
+                                download_url: `/api/synology/download?path=${encodeURIComponent(nf.path)}&name=${encodeURIComponent(nf.name)}`,
+                                uploaded_at: nf.time ? new Date(nf.time * 1000).toISOString().replace('T', ' ').substring(0, 19) : null,
+                                source: 'synology',
+                            });
+                        }
+                    }
+                } catch (nasErr) {
+                    logger.warning(`Failed to list files from NAS for WO ${wo}: ${nasErr.message}`);
+                }
+            }
+
+            const files = Array.from(fileMap.values());
+
+            res.json({
+                success: true,
+                work_order: wo,
+                count: files.length,
+                files,
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
+
+    // =============================================
+    // ⚡️ استعراض صورة مصغّرة مع تخزين مؤقت على القرص (سريع جداً جداً)
     // GET /api/image-thumb/:id
     // =============================================
     app.get('/api/image-thumb/:id', async (req, res) => {
@@ -558,25 +723,80 @@ function register(app, bot, uploader, logger, emailReader) {
             if (!uploadId) return res.status(400).send('Invalid ID');
 
             const upload = db.getUploadById(uploadId);
-
             if (!upload || !upload.drive_id) {
                 return res.status(404).send('Image not found');
+            }
+
+            const size = req.query.size || 'medium';
+            const cacheFile = getThumbCachePath(upload.drive_id, size);
+
+            // فحص الكاش المحلي أولاً — استجابة فورية بأجزاء من الثانية!
+            if (fs.existsSync(cacheFile)) {
+                res.set({
+                    'Content-Type': 'image/jpeg',
+                    'Cache-Control': 'public, max-age=2592000, immutable',
+                    'X-Work-Order': upload.work_order,
+                    'X-Cache': 'HIT',
+                });
+                return res.sendFile(cacheFile);
             }
 
             if (!uploader.getThumbnail) {
                 return res.status(501).send('Thumbnails not supported with current storage');
             }
 
-            const thumbBuffer = await uploader.getThumbnail(upload.drive_id, req.query.size || 'medium');
+            const thumbBuffer = await uploader.getThumbnail(upload.drive_id, size);
+
+            // حفظ في الكاش المحلي للمرات القادمة
+            fs.writeFile(cacheFile, thumbBuffer, () => {});
 
             res.set({
                 'Content-Type': 'image/jpeg',
-                'Cache-Control': 'public, max-age=3600',
+                'Cache-Control': 'public, max-age=2592000, immutable',
                 'X-Work-Order': upload.work_order,
+                'X-Cache': 'MISS',
             });
             res.send(thumbBuffer);
         } catch (e) {
             logger.warning(`Thumbnail proxy error: ${e.message}`);
+            res.status(500).send('Could not load thumbnail');
+        }
+    });
+
+    // =============================================
+    // ⚡️ استعراض مصغّر عبر مسار سينولجي مباشرة
+    // GET /api/synology/thumb?path=...&size=medium
+    // =============================================
+    app.get('/api/synology/thumb', async (req, res) => {
+        try {
+            const filePath = req.query.path;
+            const size = req.query.size || 'medium';
+            if (!filePath) return res.status(400).send('Path required');
+
+            const cacheFile = getThumbCachePath(filePath, size);
+            if (fs.existsSync(cacheFile)) {
+                res.set({
+                    'Content-Type': 'image/jpeg',
+                    'Cache-Control': 'public, max-age=2592000, immutable',
+                    'X-Cache': 'HIT',
+                });
+                return res.sendFile(cacheFile);
+            }
+
+            if (!uploader || !uploader.getThumbnail) {
+                return res.status(501).send('Thumbnails not supported');
+            }
+
+            const thumbBuffer = await uploader.getThumbnail(filePath, size);
+            fs.writeFile(cacheFile, thumbBuffer, () => {});
+
+            res.set({
+                'Content-Type': 'image/jpeg',
+                'Cache-Control': 'public, max-age=2592000, immutable',
+                'X-Cache': 'MISS',
+            });
+            res.send(thumbBuffer);
+        } catch (e) {
             res.status(500).send('Could not load thumbnail');
         }
     });
@@ -591,7 +811,6 @@ function register(app, bot, uploader, logger, emailReader) {
             if (!uploadId) return res.status(400).send('Invalid ID');
 
             const upload = db.getUploadById(uploadId);
-
             if (!upload || !upload.drive_id) {
                 return res.status(404).send('Image not found');
             }
@@ -604,7 +823,7 @@ function register(app, bot, uploader, logger, emailReader) {
 
             res.set({
                 'Content-Type': contentType,
-                'Cache-Control': 'public, max-age=3600',
+                'Cache-Control': 'public, max-age=2592000, immutable',
                 'X-Work-Order': upload.work_order,
                 'X-File-Name': upload.file_name,
             });
@@ -612,6 +831,182 @@ function register(app, bot, uploader, logger, emailReader) {
         } catch (e) {
             logger.warning(`Image proxy error: ${e.message}`);
             res.status(500).send('Could not load image');
+        }
+    });
+
+    // =============================================
+    // 🖼 استعراض بالحجم الكامل عبر مسار سينولجي
+    // GET /api/synology/full?path=...
+    // =============================================
+    app.get('/api/synology/full', async (req, res) => {
+        try {
+            const filePath = req.query.path;
+            if (!filePath) return res.status(400).send('Path required');
+
+            if (!uploader || !uploader.downloadFile) {
+                return res.status(501).send('Download not supported');
+            }
+
+            const { buffer, contentType } = await uploader.downloadFile(filePath);
+            res.set({
+                'Content-Type': contentType,
+                'Cache-Control': 'public, max-age=2592000, immutable',
+            });
+            res.send(buffer);
+        } catch (e) {
+            res.status(500).send('Could not load image');
+        }
+    });
+
+    // =============================================
+    // ⬇️ تحميل ملف فردي
+    // GET /api/synology/download?path=...&name=...
+    // =============================================
+    app.get('/api/synology/download', async (req, res) => {
+        try {
+            const filePath = req.query.path;
+            const fileName = req.query.name || path.basename(filePath);
+            if (!filePath) return res.status(400).send('Path required');
+
+            if (!uploader || !uploader.downloadFile) {
+                return res.status(501).send('Download not supported');
+            }
+
+            const { buffer, contentType } = await uploader.downloadFile(filePath);
+            res.set({
+                'Content-Type': contentType,
+                'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
+            });
+            res.send(buffer);
+        } catch (e) {
+            res.status(500).send('Download error');
+        }
+    });
+
+    // =============================================
+    // 📦 تحميل كل الصور أو صور محددة كملف مضغوط (ZIP Streaming)
+    // GET  /api/work-orders/:wo/zip
+    // POST /api/work-orders/:wo/download-selected-zip
+    // =============================================
+    const handleDownloadZip = async (req, res) => {
+        const wo = req.params.wo;
+        const selectedIds = req.body?.ids || null;
+
+        try {
+            let files = db.getFilesByWorkOrder(wo);
+            if (selectedIds && Array.isArray(selectedIds) && selectedIds.length > 0) {
+                const idSet = new Set(selectedIds.map(Number));
+                files = files.filter(f => idSet.has(f.id));
+            }
+
+            if (files.length === 0 && uploader && uploader.listFiles) {
+                const nasFiles = await uploader.listFiles(wo);
+                files = nasFiles.map(nf => ({
+                    file_name: nf.name,
+                    drive_id: nf.path,
+                }));
+            }
+
+            if (files.length === 0) {
+                return res.status(404).send('لا توجد ملفات لتحميلها');
+            }
+
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Disposition', `attachment; filename="WO_${wo}_images_${Date.now()}.zip"`);
+
+            const archive = archiver('zip', {
+                zlib: { level: 4 },
+            });
+
+            archive.on('error', (err) => {
+                logger.warning(`Archive error for WO ${wo}: ${err.message}`);
+                if (!res.headersSent) res.status(500).send('Archive error');
+            });
+
+            archive.pipe(res);
+
+            for (const file of files) {
+                if (!file.drive_id) continue;
+                try {
+                    const { buffer } = await uploader.downloadFile(file.drive_id);
+                    archive.append(buffer, { name: file.file_name });
+                } catch (err) {
+                    logger.warning(`Failed to add file ${file.file_name} to zip: ${err.message}`);
+                }
+            }
+
+            await archive.finalize();
+        } catch (e) {
+            logger.warning(`ZIP download failed: ${e.message}`);
+            if (!res.headersSent) {
+                res.status(500).json({ success: false, message: e.message });
+            }
+        }
+    };
+
+    app.get('/api/work-orders/:wo/zip', handleDownloadZip);
+    app.post('/api/work-orders/:wo/download-selected-zip', handleDownloadZip);
+
+    // =============================================
+    // 🚚 نقل صور بين أوامر عمل (محددة أو الكل)
+    // POST /api/work-orders/move
+    // =============================================
+    app.post('/api/work-orders/move', requireAuth, async (req, res) => {
+        try {
+            const { from_wo, to_wo, file_ids, all } = req.body || {};
+
+            if (!from_wo || !to_wo) {
+                return res.status(400).json({ success: false, message: 'from_wo و to_wo مطلوبان' });
+            }
+
+            let filesToMove = [];
+            if (all) {
+                filesToMove = db.getFilesByWorkOrder(from_wo);
+            } else if (Array.isArray(file_ids) && file_ids.length > 0) {
+                const allFiles = db.getFilesByWorkOrder(from_wo);
+                const idSet = new Set(file_ids.map(Number));
+                filesToMove = allFiles.filter(f => idSet.has(f.id));
+            } else {
+                return res.status(400).json({ success: false, message: 'file_ids أو all=true مطلوب' });
+            }
+
+            if (filesToMove.length === 0) {
+                return res.json({ success: false, message: 'لا توجد ملفات لنقلها' });
+            }
+
+            let moved = 0;
+            const newDriveIdsMap = {};
+
+            for (const file of filesToMove) {
+                const targetSubFolder = file.group_name || file.sender || null;
+                const newFolder = await uploader.getOrCreateFolder(to_wo, targetSubFolder);
+                const sourcePath = file.drive_id;
+
+                if (sourcePath && uploader.moveFile) {
+                    try {
+                        await uploader.moveFile(sourcePath, newFolder);
+                        newDriveIdsMap[file.id] = `${newFolder}/${file.file_name}`;
+                    } catch (moveErr) {
+                        logger.warning(`Synology move error for ${file.file_name}: ${moveErr.message}`);
+                    }
+                }
+                moved++;
+            }
+
+            // تحديث قاعدة البيانات
+            db.moveSelectedUploads(filesToMove.map(f => f.id), to_wo, newDriveIdsMap);
+
+            logger.info(`Moved ${moved} files from WO ${from_wo} to WO ${to_wo}`);
+
+            res.json({
+                success: true,
+                moved,
+                from_wo,
+                to_wo,
+                message: `تم نقل ${moved} ملف بنجاح من أمر العمل ${from_wo} إلى ${to_wo}`,
+            });
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
         }
     });
 

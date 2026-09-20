@@ -206,27 +206,42 @@ class WhatsAppBot extends EventEmitter {
 
             let groupId = msg.from;
             let groupName = 'Unknown Group';
-            let chat;
 
-            try {
-                chat = await msg.getChat();
-                if (!chat.isGroup) return;
-                groupId = chat.id._serialized;
-                groupName = chat.name || 'Unknown Group';
-            } catch (err) {
-                // إذا فشل getChat بسبب مشاكل Puppeteer/WhatsApp Web، نسترد الاسم من قاعدة البيانات أو المعرّف
+            // محاولة جلب اسم المجموعة مباشرة من الذاكرة لتجنب استدعاء GroupMetadata.update المعطل في واتساب ويب
+            let resolvedName = null;
+            if (this.client?.pupPage) {
+                try {
+                    resolvedName = await this.client.pupPage.evaluate((cId) => {
+                        const ChatCol = window.require?.('WAWebCollections')?.Chat || window.Store?.Chat;
+                        const c = ChatCol ? ChatCol.get(cId) : null;
+                        return c ? (c.name || c.formattedTitle) : null;
+                    }, groupId);
+                } catch (e) {}
+            }
+
+            if (resolvedName) {
+                groupName = resolvedName;
+            } else {
+                // جلب الاسم من جدول المجموعات أو سجلات الرفع السابقة
                 try {
                     const db = require('./database');
-                    const row = db.getInstance().prepare('SELECT group_name FROM uploads WHERE group_id = ? AND group_name IS NOT NULL LIMIT 1').get(groupId);
-                    if (row && row.group_name) {
-                        groupName = row.group_name;
+                    const groupRow = db.getInstance().prepare('SELECT name FROM groups WHERE id = ?').get(groupId);
+                    if (groupRow && groupRow.name) {
+                        groupName = groupRow.name;
                     } else {
-                        groupName = groupId.split('@')[0];
+                        const row = db.getInstance().prepare('SELECT group_name FROM uploads WHERE group_id = ? AND group_name IS NOT NULL LIMIT 1').get(groupId);
+                        if (row && row.group_name) {
+                            groupName = row.group_name;
+                        } else {
+                            // محاولة أخيرة هادئة بدون تحذير
+                            const chat = await msg.getChat().catch(() => null);
+                            if (chat && chat.name) groupName = chat.name;
+                            else groupName = groupId.split('@')[0];
+                        }
                     }
                 } catch (dbErr) {
                     groupName = groupId.split('@')[0];
                 }
-                console.log(`⚠️ تعذر جلب تفاصيل المجموعة (${groupId}) بسبب خطأ الواتساب. سنستمر باستخدام الاسم: ${groupName}`);
             }
 
             // حفظ وتحديث المجموعة في قاعدة البيانات تلقائياً
