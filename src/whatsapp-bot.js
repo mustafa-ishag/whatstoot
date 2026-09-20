@@ -827,10 +827,10 @@ class WhatsAppBot extends EventEmitter {
             let stats = { total: 0, unread: 0 };
             for (let i = 0; i < 6; i++) {
                 stats = await this.client.pupPage.evaluate(() => {
-                    const ChatCollection = window.require('WAWebCollections').Chat;
-                    if (!ChatCollection) return { total: 0, unread: 0 };
+                    const ChatCollection = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
+                    if (!ChatCollection || typeof ChatCollection.getModelsArray !== 'function') return { total: 0, unread: 0 };
                     const chats = ChatCollection.getModelsArray();
-                    const unread = chats.filter(c => c.unreadCount > 0).length;
+                    const unread = chats.filter(c => c && c.unreadCount > 0).length;
                     return { total: chats.length, unread };
                 });
                 
@@ -846,15 +846,21 @@ class WhatsAppBot extends EventEmitter {
 
             // جلب كل المجموعات المراقبة النشطة في الحساب
             const groupsToSync = await this.client.pupPage.evaluate((monitoredGroups) => {
-                const ChatCollection = window.require('WAWebCollections').Chat;
-                if (!ChatCollection) return [];
+                const ChatCollection = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
+                if (!ChatCollection || typeof ChatCollection.getModelsArray !== 'function') return [];
                 
                 return ChatCollection.getModelsArray()
-                    .filter(c => c.isGroup)
+                    .filter(c => {
+                        if (!c || !c.id) return false;
+                        const isGrp = (c.id._serialized && c.id._serialized.endsWith('@g.us')) ||
+                                      c.id.server === 'g.us' ||
+                                      Boolean(c.groupMetadata);
+                        return isGrp && !c.isNewsletter && !c.isChannel;
+                    })
                     .map(c => ({
-                        id: c.id._serialized,
-                        name: c.name || c.formattedTitle || 'Unknown Group',
-                        unreadCount: c.unreadCount
+                        id: c.id?._serialized || c.id,
+                        name: c.formattedTitle || c.name || c.contact?.name || c.contact?.pushname || 'Unknown Group',
+                        unreadCount: c.unreadCount || 0
                     }))
                     .filter(g => {
                         if (monitoredGroups === 'all') return true;
@@ -889,30 +895,42 @@ class WhatsAppBot extends EventEmitter {
                 
                 try {
                     const rawMsgs = await this.client.pupPage.evaluate(async (chatId, limit) => {
-                        const chatWid = window.require('WAWebWidFactory').createWid(chatId);
-                        const chat = window.require('WAWebCollections').Chat.get(chatWid) ||
-                            (await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid))?.chat;
+                        const WidFactory = window.require?.('WAWebWidFactory');
+                        const ChatCol = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
+                        const FindChat = window.require?.('WAWebFindChatAction');
+                        const chatWid = WidFactory ? WidFactory.createWid(chatId) : chatId;
+                        let chat = ChatCol ? ChatCol.get(chatWid) : null;
+                        if (!chat && FindChat) {
+                            chat = (await FindChat.findOrCreateLatestChat(chatWid))?.chat;
+                        }
                         
-                        if (!chat) return [];
+                        if (!chat || !chat.msgs) return [];
 
                         const msgFilter = (m) => {
-                            if (m.isNotification) return false;
+                            if (!m || m.isNotification) return false;
                             return true;
                         };
 
-                        let msgs = chat.msgs.getModelsArray().filter(msgFilter);
+                        let msgs = chat.msgs.getModelsArray ? chat.msgs.getModelsArray().filter(msgFilter) : [];
                         
                         // تحميل الرسائل السابقة إذا لم تكن كافية
                         let attempts = 0;
-                        while (msgs.length < limit && attempts < 5) {
+                        const ChatLoad = window.require?.('WAWebChatLoadMessages');
+                        while (msgs.length < limit && attempts < 5 && ChatLoad) {
                             attempts++;
-                            const loadedMessages = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
+                            const loadedMessages = await ChatLoad.loadEarlierMsgs({ chat });
                             if (!loadedMessages || !loadedMessages.length) break;
                             msgs = [...loadedMessages.filter(msgFilter), ...msgs];
                         }
 
                         const slicedMsgs = msgs.slice(-limit);
-                        return slicedMsgs.map(m => window.WWebJS.getMessageModel(m));
+                        return slicedMsgs.map(m => {
+                            try {
+                                return window.WWebJS.getMessageModel(m);
+                            } catch (e) {
+                                return null;
+                            }
+                        }).filter(Boolean);
                     }, groupId, limit);
 
                     let groupProcessedCount = 0;
