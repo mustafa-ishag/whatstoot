@@ -187,15 +187,24 @@ class WhatsAppBot extends EventEmitter {
     }
 
     /**
-     * تطبيق إصلاحات برمجية مباشرة داخل صفحة واتساب ويب لتفادي أخطاء المكتبة (مثل خطأ memoize id property و getChat و No LID)
+     * تطبيق إصلاحات برمجية مباشرة داخل صفحة واتساب ويب لتفادي أخطاء المكتبة (مثل خطأ memoize id property و getChat و No LID وسياق التنفيذ)
      */
-    async _applyPuppeteerFixes() {
+    async _applyPuppeteerFixes(retries = 2) {
         if (!this.client?.pupPage) return;
         try {
             // 1. التحقق من وجود كائن WWebJS ودواله الأساسية، وإعادة حقنه فوراً إن لم يكن متوفراً
-            const needsInjection = await this.client.pupPage.evaluate(() => {
-                return typeof window.WWebJS === 'undefined' || typeof window.WWebJS.getChat !== 'function';
-            }).catch(() => true);
+            let needsInjection = true;
+            try {
+                needsInjection = await this.client.pupPage.evaluate(() => {
+                    return typeof window.WWebJS === 'undefined' || typeof window.WWebJS.getChat !== 'function';
+                });
+            } catch (evalErr) {
+                if (evalErr.message && (evalErr.message.includes('Execution context was destroyed') || evalErr.message.includes('Cannot find context')) && retries > 0) {
+                    await new Promise(r => setTimeout(r, 1500));
+                    return this._applyPuppeteerFixes(retries - 1);
+                }
+                needsInjection = true;
+            }
 
             if (needsInjection) {
                 const { LoadUtils } = require('whatsapp-web.js/src/util/Injected/Utils');
@@ -360,17 +369,19 @@ class WhatsAppBot extends EventEmitter {
             });
             console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize & LID بنجاح');
         } catch (e) {
+            if (e.message && (e.message.includes('Execution context was destroyed') || e.message.includes('Cannot find context')) && retries > 0) {
+                await new Promise(r => setTimeout(r, 1500));
+                return this._applyPuppeteerFixes(retries - 1);
+            }
             console.error('⚠️ خطأ أثناء تطبيق حماية Puppeteer:', e.message);
         }
     }
 
     /**
-     * إرسال رسالة نصية (يُستخدم من QueueWorker و EmailReader و API)
+     * إرسال رسالة نصية (يُستخدم من QueueWorker و EmailReader و API) مع إعادة المحاولة واستعادة سياق التنفيذ
      */
-    async sendMessage(chatId, message) {
+    async sendMessage(chatId, message, retries = 3) {
         if (!this.isClientReady) return;
-
-        await this._applyPuppeteerFixes();
 
         let targetId = String(chatId).trim();
         if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
@@ -387,21 +398,34 @@ class WhatsAppBot extends EventEmitter {
             }
         }
 
-        try {
-            return await this.client.sendMessage(targetId, message);
-        } catch (err) {
-            if (err.message && (err.message.includes('id property') || err.message.includes('LID') || err.message.includes('getChat'))) {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
                 await this._applyPuppeteerFixes();
                 return await this.client.sendMessage(targetId, message);
+            } catch (err) {
+                const isRecoverable = err.message && (
+                    err.message.includes('Execution context was destroyed') ||
+                    err.message.includes('Cannot find context') ||
+                    err.message.includes('id property') ||
+                    err.message.includes('LID') ||
+                    err.message.includes('getChat') ||
+                    err.message.includes('Protocol error')
+                );
+
+                if (isRecoverable && attempt < retries) {
+                    console.warn(`⚠️ محاولة إرسال رسالة ثانية (${attempt}/${retries}) بعد ثانيتين... السبب: ${err.message}`);
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                throw err;
             }
-            throw err;
         }
     }
 
     /**
-     * إرسال ملف مستند (PDF أو غيره) بأمان تام عبر واتساب مع حماية كاملة من أخطاء memoize
+     * إرسال ملف مستند (PDF أو غيره) بأمان تام عبر واتساب مع حماية كاملة وإعادة المحاولة التلقائية
      */
-    async sendMediaDocument(chatId, filePath, filename) {
+    async sendMediaDocument(chatId, filePath, filename, retries = 3) {
         if (!this.isClientReady) {
             throw new Error('عميل واتساب غير متصل حالياً');
         }
@@ -412,9 +436,6 @@ class WhatsAppBot extends EventEmitter {
         if (!fs.existsSync(filePath)) {
             throw new Error(`الملف غير موجود: ${filePath}`);
         }
-
-        // تطبيق حماية Puppeteer إن لم تكن مفعلة
-        await this._applyPuppeteerFixes();
 
         // تنسيق وجهة الإرسال بدقة
         let targetId = chatId.trim();
@@ -437,20 +458,31 @@ class WhatsAppBot extends EventEmitter {
             media.filename = filename;
         }
 
-        // إرسال الملف
-        try {
-            return await this.client.sendMessage(targetId, media, {
-                sendMediaAsDocument: true
-            });
-        } catch (err) {
-            if (err.message && (err.message.includes('id property') || err.message.includes('No LID for user') || err.message.includes('LID') || err.message.includes('getChat'))) {
-                // محاولة إضافية عبر إعادة تطبيق الإصلاح والإرسال المباشر
+        // إرسال الملف مع إعادة المحاولة وحماية سياق التنفيذ
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
                 await this._applyPuppeteerFixes();
                 return await this.client.sendMessage(targetId, media, {
                     sendMediaAsDocument: true
                 });
+            } catch (err) {
+                const isRecoverable = err.message && (
+                    err.message.includes('Execution context was destroyed') ||
+                    err.message.includes('Cannot find context') ||
+                    err.message.includes('id property') ||
+                    err.message.includes('No LID for user') ||
+                    err.message.includes('LID') ||
+                    err.message.includes('getChat') ||
+                    err.message.includes('Protocol error')
+                );
+
+                if (isRecoverable && attempt < retries) {
+                    console.warn(`⚠️ محاولة إرسال مستند ثانية (${attempt}/${retries}) بعد ثانيتين... السبب: ${err.message}`);
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+                throw err;
             }
-            throw err;
         }
     }
 
