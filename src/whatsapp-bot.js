@@ -403,7 +403,7 @@ class WhatsAppBot extends EventEmitter {
         }
 
         let targetId = String(chatId).trim();
-        if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
+        if (!targetId.includes('@g.us') && !targetId.includes('@c.us') && !targetId.includes('@lid')) {
             let cleanNumber = targetId.replace(/[^0-9]/g, '');
             if (cleanNumber.startsWith('05') && cleanNumber.length === 10) {
                 cleanNumber = '966' + cleanNumber.substring(1);
@@ -475,7 +475,7 @@ class WhatsAppBot extends EventEmitter {
 
         // تنسيق وجهة الإرسال بدقة
         let targetId = chatId.trim();
-        if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
+        if (!targetId.includes('@g.us') && !targetId.includes('@c.us') && !targetId.includes('@lid')) {
             let cleanNumber = targetId.replace(/[^0-9]/g, '');
             if (cleanNumber.startsWith('05') && cleanNumber.length === 10) {
                 cleanNumber = '966' + cleanNumber.substring(1);

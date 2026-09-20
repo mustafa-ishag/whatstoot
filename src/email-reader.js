@@ -388,10 +388,12 @@ class EmailReader {
         }
 
         let chatId = target.trim();
-        if (!chatId.includes('@g.us')) {
+        if (!chatId.includes('@g.us') && !chatId.includes('@c.us') && !chatId.includes('@lid')) {
             let number = chatId.replace(/[^0-9]/g, '');
-            if (number.startsWith('05')) {
+            if (number.startsWith('05') && number.length === 10) {
                 number = '966' + number.substring(1);
+            } else if (number.startsWith('5') && number.length === 9) {
+                number = '966' + number;
             }
             // استعلام رقم الواتساب الحقيقي لضمان تحميل جهة الاتصال في الذاكرة وتفادي خطأ memoize
             try {
