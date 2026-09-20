@@ -219,13 +219,17 @@ class EmailReader {
         for (const att of attachments) {
             const mime = (att.contentType || '').toLowerCase();
             const filename = att.filename || `attachment_${Date.now()}`;
+            const ext = path.extname(filename).toLowerCase();
 
-            if (mime.startsWith('image/')) {
-                images.push({ data: att.content, mime, filename });
-                console.log(`📧   🖼 صورة: ${filename} (${this._formatSize(att.size)})`);
-            } else if (mime === 'application/pdf') {
+            const isPdf = mime.includes('pdf') || ext === '.pdf';
+            const isImage = mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].includes(ext);
+
+            if (isPdf) {
                 pdfs.push({ data: att.content, filename });
                 console.log(`📧   📄 PDF: ${filename} (${this._formatSize(att.size)})`);
+            } else if (isImage) {
+                images.push({ data: att.content, mime: mime.startsWith('image/') ? mime : 'image/jpeg', filename });
+                console.log(`📧   🖼 صورة: ${filename} (${this._formatSize(att.size)})`);
             } else {
                 console.log(`📧   ⏩ تجاهل: ${filename} (${mime})`);
             }
@@ -236,9 +240,13 @@ class EmailReader {
 
         // 1. حفظ ملفات PDF المرفقة مباشرة
         for (const pdf of pdfs) {
+            let cleanFilename = this._sanitizeFilename(pdf.filename);
+            if (!cleanFilename.toLowerCase().endsWith('.pdf')) {
+                cleanFilename += '.pdf';
+            }
             const pdfName = workOrder
-                ? `${workOrder}_${this._sanitizeFilename(pdf.filename)}`
-                : pdf.filename;
+                ? `${workOrder}_${cleanFilename}`
+                : cleanFilename;
             const pdfPath = path.join(this.tempPath, pdfName);
             fs.writeFileSync(pdfPath, pdf.data);
             pdfFilesToSend.push({ path: pdfPath, name: pdfName });
@@ -350,11 +358,14 @@ class EmailReader {
     async _sendPdfsViaWhatsApp(pdfFiles, workOrder, subject) {
         // تحديد جهة الإرسال (مجموعة أو رقم)
         let target = db.getSetting('email_whatsapp_target') || this.whatsappNumber;
-        let chatId = target;
+        if (!target) {
+            console.log('📧 ⚠️ لم يتم تحديد جهة استقبال لإشعارات البريد (email_whatsapp_target)');
+            return;
+        }
 
-        if (!target.includes('@g.us')) {
-            // تنسيق رقم الواتساب إذا لم يكن مجموعة
-            let number = target.replace(/[^0-9]/g, '');
+        let chatId = target.trim();
+        if (!chatId.includes('@g.us')) {
+            let number = chatId.replace(/[^0-9]/g, '');
             if (number.startsWith('05')) {
                 number = '966' + number.substring(1);
             }
@@ -365,9 +376,7 @@ class EmailReader {
         const separator = `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`;
 
         // رسالة تعريفية
-        const intro = workOrder
-            ? `${separator}\n🟢 *إسناد جديد*\n${separator}\n\n📋 *${subject}*\n📎 عدد الملفات: ${pdfFiles.length}`
-            : `${separator}\n🟢 *إسناد جديد*\n${separator}\n\n📋 *${subject}*\n📎 عدد الملفات: ${pdfFiles.length}`;
+        const intro = `${separator}\n🟢 *إسناد جديد*\n${separator}\n\n📋 *${subject}*\n📎 عدد الملفات: ${pdfFiles.length}`;
 
         try {
             await this.bot.client.sendMessage(chatId, intro);
@@ -381,6 +390,11 @@ class EmailReader {
 
         for (const file of pdfFiles) {
             try {
+                if (!fs.existsSync(file.path)) {
+                    console.error(`📧 ❌ الملف غير موجود للإرسال: ${file.path}`);
+                    continue;
+                }
+
                 const pdfData = fs.readFileSync(file.path);
                 const base64 = pdfData.toString('base64');
 
@@ -390,11 +404,25 @@ class EmailReader {
                     file.name
                 );
 
-                await this.bot.client.sendMessage(chatId, media);
+                // إرسال كـ Document مع خيار sendMediaAsDocument: true وخاصية إعادة المحاولة
+                try {
+                    await this.bot.client.sendMessage(chatId, media, {
+                        sendMediaAsDocument: true,
+                        caption: file.name,
+                    });
+                } catch (sendErr) {
+                    console.warn(`📧 ⚠️ محاولة ثانية لإرسال ${file.name} بعد ثانيتين... السبب: ${sendErr.message}`);
+                    await this._sleep(2000);
+                    await this.bot.client.sendMessage(chatId, media, {
+                        sendMediaAsDocument: true,
+                        caption: file.name,
+                    });
+                }
+
                 console.log(`📧 ✅ تم إرسال: ${file.name}`);
                 this.stats.pdfsSent++;
 
-                // تأخير بسيط بين الملفات
+                // تأخير بسيط بين الملفات لتجنب ضغط الخادم
                 await this._sleep(2000);
 
             } catch (err) {
@@ -461,7 +489,7 @@ class EmailReader {
      * تنظيف اسم الملف
      */
     _sanitizeFilename(name) {
-        return name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        return (name || '').replace(/[\\/:*?"<>|]/g, '_').trim() || `attachment_${Date.now()}.pdf`;
     }
 
     /**
