@@ -320,59 +320,99 @@ class WhatsAppBot extends EventEmitter {
                     };
                 }
 
-                // 3. إصلاح sendMessage: حماية message.id من المسح بسبب mediaOptions.toJSON() والتعامل مع أخطاء LID
+                // 3. إصلاح sendMessage الحاسم للوسائط والمستندات (PDF وغيرها):
+                // يمنع مسح newMsgKey الناتج عن تمديد mediaOptions.toJSON() ويضمن وصول الملفات لواتساب
                 if (window.WWebJS.sendMessage && !window.WWebJS._origSendMessage) {
                     window.WWebJS._origSendMessage = window.WWebJS.sendMessage;
                     window.WWebJS.sendMessage = async function(chat, content, options = {}) {
-                        try {
+                        // إذا كانت الرسالة نصية فقط، نستخدم الدالة الأصلية
+                        if (!options.media) {
                             return await window.WWebJS._origSendMessage(chat, content, options);
-                        } catch (err) {
-                            // إذا حدث خطأ memoize id property أو خطأ No LID for user، إعادة المحاولة مع تصحيح المعرف
-                            if (err.message && (err.message.includes('id property') || err.message.includes('No LID for user') || err.message.includes('LID'))) {
-                                const newId = await window.require('WAWebMsgKey').newId();
-                                const { getMaybeMePnUser, getMaybeMeLidUser } = window.require('WAWebUserPrefsMeUser');
-                                const meUser = getMaybeMePnUser() || getMaybeMeLidUser();
-                                const from = (chat.id.isLid && chat.id.isLid()) ? (getMaybeMeLidUser() || meUser) : meUser;
-                                const newMsgKey = new (window.require('WAWebMsgKey'))({
-                                    from: from,
-                                    to: chat.id,
-                                    id: newId,
-                                    selfDir: 'out'
-                                });
-
-                                let mediaOptions = {};
-                                if (options.media) {
-                                    mediaOptions = await window.WWebJS.processMediaData(options.media, {
-                                        forceDocument: true
-                                    });
-                                }
-
-                                const rawMediaData = mediaOptions.toJSON ? mediaOptions.toJSON() : mediaOptions;
-                                delete rawMediaData.id;
-
-                                const message = {
-                                    ...options,
-                                    id: newMsgKey,
-                                    ack: 0,
-                                    body: options.caption || '',
-                                    from: from,
-                                    to: chat.id,
-                                    local: true,
-                                    self: 'out',
-                                    t: parseInt(new Date().getTime() / 1000),
-                                    isNewMsg: true,
-                                    type: 'document',
-                                    ...rawMediaData,
-                                    id: newMsgKey
-                                };
-
-                                const [msgPromise] = window.require('WAWebSendMsgChatAction').addAndSendMsgToChat(chat, message);
-                                await msgPromise;
-                                const MsgCollection = window.require('WAWebCollections').Msg;
-                                return MsgCollection.get(newMsgKey._serialized) || message;
-                            }
-                            throw err;
                         }
+
+                        // عند إرسال وسائط ومستندات (PDF):
+                        const mediaInfo = options.media;
+                        const isDoc = !!options.sendMediaAsDocument;
+                        const isSticker = !!options.sendMediaAsSticker;
+
+                        let mediaOptions = {};
+                        if (isSticker) {
+                            mediaOptions = await window.WWebJS.processStickerData(mediaInfo);
+                        } else {
+                            mediaOptions = await window.WWebJS.processMediaData(mediaInfo, {
+                                forceSticker: isSticker,
+                                forceGif: !!options.sendVideoAsGif,
+                                forceVoice: !!options.sendAudioAsVoice,
+                                forceDocument: isDoc,
+                                forceMediaHd: !!options.sendMediaAsHd,
+                                sendToChannel: false,
+                                sendToStatus: false,
+                            });
+                        }
+
+                        // إزالة id و __x_id من كائن الوسائط لأنها تمسح newMsgKey وتتسبب في فشل الإرسال
+                        const rawMediaData = mediaOptions.toJSON ? mediaOptions.toJSON() : { ...mediaOptions };
+                        delete rawMediaData.id;
+                        delete rawMediaData.__x_id;
+
+                        const { getMaybeMePnUser, getMaybeMeLidUser } = window.require('WAWebUserPrefsMeUser');
+                        const mePn = getMaybeMePnUser ? getMaybeMePnUser() : null;
+                        const meLid = getMaybeMeLidUser ? getMaybeMeLidUser() : null;
+                        const isChatLid = typeof chat.id?.isLid === 'function' && chat.id.isLid();
+                        const from = (isChatLid && meLid) ? meLid : (mePn || meLid);
+
+                        let participant;
+                        if (typeof chat.id?.isGroup === 'function' && chat.id.isGroup()) {
+                            const isLidMode = chat.groupMetadata && chat.groupMetadata.isLidAddressingMode;
+                            const groupFrom = isLidMode && meLid ? meLid : (mePn || meLid);
+                            participant = window.require('WAWebWidFactory').asUserWidOrThrow(groupFrom);
+                        }
+
+                        const newId = await window.require('WAWebMsgKey').newId();
+                        const newMsgKey = new (window.require('WAWebMsgKey'))({
+                            from: from,
+                            to: chat.id,
+                            id: newId,
+                            participant: participant,
+                            selfDir: 'out'
+                        });
+
+                        const ephemeralFields = window.require('WAWebGetEphemeralFieldsMsgActionsUtils')?.getEphemeralFields(chat) || {};
+
+                        const cleanOptions = { ...options };
+                        delete cleanOptions.media;
+                        delete cleanOptions.sendMediaAsSticker;
+                        delete cleanOptions.extraOptions;
+
+                        const message = {
+                            ...cleanOptions,
+                            ack: 0,
+                            body: options.caption || (isSticker ? undefined : mediaOptions.preview) || '',
+                            caption: options.caption,
+                            from: from,
+                            to: chat.id,
+                            local: true,
+                            self: 'out',
+                            t: parseInt(new Date().getTime() / 1000),
+                            isNewMsg: true,
+                            type: isDoc ? 'document' : (mediaOptions.type || 'image'),
+                            ...ephemeralFields,
+                            ...rawMediaData,
+                            id: newMsgKey // تثبيت newMsgKey في النهاية بشكل صارم
+                        };
+
+                        const [msgPromise, sendMsgResultPromise] = window.require('WAWebSendMsgChatAction').addAndSendMsgToChat(chat, message);
+                        await msgPromise;
+
+                        if (options.waitUntilMsgSent && sendMsgResultPromise) {
+                            try {
+                                await sendMsgResultPromise;
+                            } catch (e) {}
+                        }
+
+                        const MsgCollection = window.require('WAWebCollections').Msg;
+                        const msgKeyStr = newMsgKey._serialized || newMsgKey.toString?.() || newMsgKey.id;
+                        return (msgKeyStr ? MsgCollection.get(msgKeyStr) : null) || message;
                     };
                 }
 
@@ -472,33 +512,33 @@ class WhatsAppBot extends EventEmitter {
             targetId = `${cleanNumber}@c.us`;
         }
 
+        const stats = fs.statSync(filePath);
         const media = MessageMedia.fromFilePath(filePath);
         if (filename) {
             media.filename = filename;
         }
+        if (!media.mimetype) {
+            media.mimetype = 'application/pdf';
+        }
+
+        console.log(`📤 جاري إرسال مستند إلى ${targetId}: ${filename || path.basename(filePath)} (${(stats.size / 1024).toFixed(1)} KB)`);
+
+        // التأكد من تطبيق حماية Puppeteer قبل الإرسال
+        await this._applyPuppeteerFixes();
 
         // إرسال الملف مع إعادة المحاولة وحماية سياق التنفيذ
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                return await this.client.sendMessage(targetId, media, {
+                const res = await this.client.sendMessage(targetId, media, {
                     sendMediaAsDocument: true
                 });
+                console.log(`✅ تم تسليم المستند بنجاح إلى ${targetId}: ${filename || path.basename(filePath)}`);
+                return res;
             } catch (err) {
-                const isRecoverable = err.message && (
-                    err.message.includes('Execution context was destroyed') ||
-                    err.message.includes('Cannot find context') ||
-                    err.message.includes('id property') ||
-                    err.message.includes('No LID for user') ||
-                    err.message.includes('LID') ||
-                    err.message.includes('getChat') ||
-                    err.message.includes('Protocol error') ||
-                    err.message.includes('WWebJS')
-                );
-
-                if (isRecoverable && attempt < retries) {
-                    console.warn(`⚠️ محاولة إرسال مستند ثانية (${attempt}/${retries}) بعد ثانيتين... السبب: ${err.message}`);
+                console.warn(`⚠️ محاولة إرسال مستند (${attempt}/${retries}) إلى ${targetId} فشلت: ${err.message}`);
+                if (attempt < retries) {
                     await this._applyPuppeteerFixes();
-                    await new Promise(r => setTimeout(r, 2000));
+                    await new Promise(r => setTimeout(r, 2000 * attempt));
                     continue;
                 }
                 throw err;
