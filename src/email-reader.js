@@ -369,7 +369,21 @@ class EmailReader {
             if (number.startsWith('05')) {
                 number = '966' + number.substring(1);
             }
-            chatId = `${number}@c.us`;
+            // استعلام رقم الواتساب الحقيقي لضمان تحميل جهة الاتصال في الذاكرة وتفادي خطأ memoize
+            try {
+                if (this.bot && this.bot.client) {
+                    const numDetails = await this.bot.client.getNumberId(number);
+                    if (numDetails && numDetails._serialized) {
+                        chatId = numDetails._serialized;
+                    } else {
+                        chatId = `${number}@c.us`;
+                    }
+                } else {
+                    chatId = `${number}@c.us`;
+                }
+            } catch (e) {
+                chatId = `${number}@c.us`;
+            }
         }
 
         // فاصل تزييني
@@ -385,9 +399,7 @@ class EmailReader {
             console.error('📧 ❌ خطأ إرسال رسالة تعريفية:', err.message);
         }
 
-        // إرسال كل ملف PDF
-        const { MessageMedia } = require('whatsapp-web.js');
-
+        // إرسال كل ملف PDF عبر الدالة المحدثة والمحمية ضد أخطاء memoize
         for (const file of pdfFiles) {
             try {
                 if (!fs.existsSync(file.path)) {
@@ -395,32 +407,17 @@ class EmailReader {
                     continue;
                 }
 
-                const pdfData = fs.readFileSync(file.path);
-                const base64 = pdfData.toString('base64');
-
-                const media = new MessageMedia(
-                    'application/pdf',
-                    base64,
-                    file.name
-                );
-
-                // إرسال كـ Document مع خيار sendMediaAsDocument: true وخاصية إعادة المحاولة
                 try {
-                    await this.bot.client.sendMessage(chatId, media, {
-                        sendMediaAsDocument: true,
-                        caption: file.name,
-                    });
+                    await this.bot.sendMediaDocument(chatId, file.path, file.name);
+                    console.log(`📧 ✅ تم إرسال: ${file.name}`);
+                    this.stats.pdfsSent++;
                 } catch (sendErr) {
-                    console.warn(`📧 ⚠️ محاولة ثانية لإرسال ${file.name} بعد ثانيتين... السبب: ${sendErr.message}`);
-                    await this._sleep(2000);
-                    await this.bot.client.sendMessage(chatId, media, {
-                        sendMediaAsDocument: true,
-                        caption: file.name,
-                    });
+                    console.warn(`📧 ⚠️ محاولة ثانية لإرسال ${file.name} بعد 3 ثوانٍ... السبب: ${sendErr.message}`);
+                    await this._sleep(3000);
+                    await this.bot.sendMediaDocument(chatId, file.path, file.name);
+                    console.log(`📧 ✅ تم إرسال: ${file.name} (في المحاولة الثانية)`);
+                    this.stats.pdfsSent++;
                 }
-
-                console.log(`📧 ✅ تم إرسال: ${file.name}`);
-                this.stats.pdfsSent++;
 
                 // تأخير بسيط بين الملفات لتجنب ضغط الخادم
                 await this._sleep(2000);

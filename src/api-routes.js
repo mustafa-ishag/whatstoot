@@ -387,11 +387,17 @@ function register(app, bot, uploader, logger, emailReader) {
                     const ChatCollection = window.require?.('WAWebCollections')?.Chat;
                     if (!ChatCollection) return [];
                     return ChatCollection.getModelsArray()
-                        .filter(c => c && c.isGroup && !c.isNewsletter && !c.isChannel)
+                        .filter(c => {
+                            if (!c || !c.id) return false;
+                            const isGrp = (c.id._serialized && c.id._serialized.endsWith('@g.us')) || 
+                                          c.id.server === 'g.us' || 
+                                          Boolean(c.groupMetadata);
+                            return isGrp && !c.isNewsletter && !c.isChannel;
+                        })
                         .map(c => ({
                             id: c.id?._serialized,
-                            name: c.name || c.formattedTitle || 'Unknown Group',
-                            participant_count: c.participants?.length || 0,
+                            name: c.formattedTitle || c.name || c.contact?.name || c.contact?.pushname || 'مجموعة بدون اسم',
+                            participant_count: c.participants?.length || (c.groupMetadata?.participants?.length) || 0,
                         }))
                         .filter(g => g.id);
                 });

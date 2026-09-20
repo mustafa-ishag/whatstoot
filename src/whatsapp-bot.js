@@ -95,13 +95,16 @@ class WhatsAppBot extends EventEmitter {
             qrcode.generate(qr, { small: true });
         });
 
-        this.client.on('ready', () => {
+        this.client.on('ready', async () => {
             this.isClientReady = true;
             this.qrCodeData = null;
             this.emit('status', { ready: true, has_qr: false });
             console.log('\n✅ واتساب جاهز! البوت يراقب المجموعات الآن...');
             console.log(`🌐 API: http://localhost:${config.PORT}\n`);
             
+            // تطبيق إصلاحات Puppeteer للتعامل مع أخطاء واتساب ويب الداخلية
+            await this._applyPuppeteerFixes();
+
             // معالجة الرسائل المعلقة التي وصلت أثناء إيقاف البوت
             setTimeout(() => {
                 this.processUnreadMessages();
@@ -184,12 +187,162 @@ class WhatsAppBot extends EventEmitter {
     }
 
     /**
-     * إرسال رسالة (يُستخدم من QueueWorker)
+     * تطبيق إصلاحات برمجية مباشرة داخل صفحة واتساب ويب لتفادي أخطاء المكتبة (مثل خطأ memoize id property)
+     */
+    async _applyPuppeteerFixes() {
+        if (!this.client?.pupPage) return;
+        try {
+            await this.client.pupPage.evaluate(() => {
+                if (!window.WWebJS) return;
+
+                // 1. إصلاح getMessageModel: منع الخطأ إذا فشل serialize بسبب memoize getter
+                if (window.WWebJS.getMessageModel && !window.WWebJS._origGetMessageModel) {
+                    window.WWebJS._origGetMessageModel = window.WWebJS.getMessageModel;
+                    window.WWebJS.getMessageModel = function(message) {
+                        try {
+                            return window.WWebJS._origGetMessageModel(message);
+                        } catch (err) {
+                            const msgId = message?.id?._serialized || message?.id?.id || 'msg_' + Date.now();
+                            return {
+                                id: {
+                                    _serialized: typeof msgId === 'string' ? msgId : 'msg_' + Date.now(),
+                                    id: typeof msgId === 'string' ? msgId : 'msg_' + Date.now(),
+                                    fromMe: true,
+                                    remote: message?.to?._serialized || message?.to || ''
+                                },
+                                ack: 1,
+                                type: message?.type || 'document',
+                                body: message?.body || message?.caption || '',
+                                t: Math.floor(Date.now() / 1000)
+                            };
+                        }
+                    };
+                }
+
+                // 2. إصلاح sendMessage: حماية message.id من المسح بسبب mediaOptions.toJSON()
+                if (window.WWebJS.sendMessage && !window.WWebJS._origSendMessage) {
+                    window.WWebJS._origSendMessage = window.WWebJS.sendMessage;
+                    window.WWebJS.sendMessage = async function(chat, content, options = {}) {
+                        try {
+                            return await window.WWebJS._origSendMessage(chat, content, options);
+                        } catch (err) {
+                            // إذا حدث خطأ memoize id property، إعادة المحاولة مع تصحيح معرف الرسالة
+                            if (err.message && err.message.includes('id property')) {
+                                const newId = await window.require('WAWebMsgKey').newId();
+                                const { getMaybeMeLidUser, getMaybeMePnUser } = window.require('WAWebUserPrefsMeUser');
+                                const from = chat.id.isLid() ? getMaybeMeLidUser() : getMaybeMePnUser();
+                                const newMsgKey = new (window.require('WAWebMsgKey'))({
+                                    from: from,
+                                    to: chat.id,
+                                    id: newId,
+                                    selfDir: 'out'
+                                });
+
+                                let mediaOptions = {};
+                                if (options.media) {
+                                    mediaOptions = await window.WWebJS.processMediaData(options.media, {
+                                        forceDocument: true
+                                    });
+                                }
+
+                                const rawMediaData = mediaOptions.toJSON ? mediaOptions.toJSON() : mediaOptions;
+                                delete rawMediaData.id;
+
+                                const message = {
+                                    ...options,
+                                    id: newMsgKey,
+                                    ack: 0,
+                                    body: options.caption || '',
+                                    from: from,
+                                    to: chat.id,
+                                    local: true,
+                                    self: 'out',
+                                    t: parseInt(new Date().getTime() / 1000),
+                                    isNewMsg: true,
+                                    type: 'document',
+                                    ...rawMediaData,
+                                    id: newMsgKey
+                                };
+
+                                const [msgPromise] = window.require('WAWebSendMsgChatAction').addAndSendMsgToChat(chat, message);
+                                await msgPromise;
+                                const MsgCollection = window.require('WAWebCollections').Msg;
+                                return MsgCollection.get(newMsgKey._serialized) || message;
+                            }
+                            throw err;
+                        }
+                    };
+                }
+            });
+            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize بنجاح');
+        } catch (e) {
+            // صامت
+        }
+    }
+
+    /**
+     * إرسال رسالة نصية (يُستخدم من QueueWorker)
      */
     async sendMessage(chatId, message) {
         if (!this.isClientReady) return;
         const id = chatId.includes('@g.us') ? chatId : `${chatId}@g.us`;
         await this.client.sendMessage(id, message);
+    }
+
+    /**
+     * إرسال ملف مستند (PDF أو غيره) بأمان تام عبر واتساب مع حماية كاملة من أخطاء memoize
+     */
+    async sendMediaDocument(chatId, filePath, filename) {
+        if (!this.isClientReady) {
+            throw new Error('عميل واتساب غير متصل حالياً');
+        }
+
+        const { MessageMedia } = require('whatsapp-web.js');
+        const fs = require('fs');
+
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`الملف غير موجود: ${filePath}`);
+        }
+
+        // تطبيق حماية Puppeteer إن لم تكن مفعلة
+        await this._applyPuppeteerFixes();
+
+        // تنسيق وجهة الإرسال بدقة
+        let targetId = chatId.trim();
+        if (!targetId.includes('@g.us')) {
+            const cleanNumber = targetId.replace(/[^0-9]/g, '');
+            try {
+                const numId = await this.client.getNumberId(cleanNumber);
+                if (numId && numId._serialized) {
+                    targetId = numId._serialized;
+                } else {
+                    targetId = `${cleanNumber}@c.us`;
+                }
+            } catch (e) {
+                targetId = `${cleanNumber}@c.us`;
+            }
+        }
+
+        const media = MessageMedia.fromFilePath(filePath);
+        if (filename) {
+            media.filename = filename;
+        }
+
+        // إرسال الملف
+        try {
+            return await this.client.sendMessage(targetId, media, {
+                sendMediaAsDocument: true
+            });
+        } catch (err) {
+            if (err.message && err.message.includes('id property')) {
+                // محاولة إضافية عبر إعادة تطبيق الإصلاح والإرسال المباشر
+                await this._applyPuppeteerFixes();
+                return await this.client.sendMessage(targetId, media, {
+                    sendMediaAsDocument: true
+                });
+            }
+            throw err;
+        }
     }
 
     /**
