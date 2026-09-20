@@ -410,25 +410,12 @@ class WhatsAppBot extends EventEmitter {
             } else if (cleanNumber.startsWith('5') && cleanNumber.length === 9) {
                 cleanNumber = '966' + cleanNumber;
             }
-            try {
-                const numId = await this.client.getNumberId(cleanNumber);
-                if (numId && numId._serialized) {
-                    targetId = numId._serialized;
-                } else {
-                    targetId = `${cleanNumber}@c.us`;
-                }
-            } catch (e) {
-                targetId = `${cleanNumber}@c.us`;
-            }
+            targetId = `${cleanNumber}@c.us`;
         }
 
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                const res = await this.client.sendMessage(targetId, message, { waitUntilMsgSent: true });
-                if (!res) {
-                    throw new Error(`فشل إرسال الرسالة إلى ${targetId} — لم يتم العثور على المحادثة أو تعذر تسليمها`);
-                }
-                return res;
+                return await this.client.sendMessage(targetId, message);
             } catch (err) {
                 const isRecoverable = err.message && (
                     err.message.includes('Execution context was destroyed') ||
@@ -482,16 +469,7 @@ class WhatsAppBot extends EventEmitter {
             } else if (cleanNumber.startsWith('5') && cleanNumber.length === 9) {
                 cleanNumber = '966' + cleanNumber;
             }
-            try {
-                const numId = await this.client.getNumberId(cleanNumber);
-                if (numId && numId._serialized) {
-                    targetId = numId._serialized;
-                } else {
-                    targetId = `${cleanNumber}@c.us`;
-                }
-            } catch (e) {
-                targetId = `${cleanNumber}@c.us`;
-            }
+            targetId = `${cleanNumber}@c.us`;
         }
 
         const media = MessageMedia.fromFilePath(filePath);
@@ -502,14 +480,9 @@ class WhatsAppBot extends EventEmitter {
         // إرسال الملف مع إعادة المحاولة وحماية سياق التنفيذ
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                const res = await this.client.sendMessage(targetId, media, {
-                    sendMediaAsDocument: true,
-                    waitUntilMsgSent: true
+                return await this.client.sendMessage(targetId, media, {
+                    sendMediaAsDocument: true
                 });
-                if (!res) {
-                    throw new Error(`فشل إرسال المستند ${filename || ''} إلى ${targetId} — لم يتم العثور على المحادثة أو تعذر تسليمها`);
-                }
-                return res;
             } catch (err) {
                 const isRecoverable = err.message && (
                     err.message.includes('Execution context was destroyed') ||

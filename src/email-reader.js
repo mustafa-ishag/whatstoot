@@ -395,21 +395,8 @@ class EmailReader {
             } else if (number.startsWith('5') && number.length === 9) {
                 number = '966' + number;
             }
-            // استعلام رقم الواتساب الحقيقي لضمان تحميل جهة الاتصال في الذاكرة وتفادي خطأ memoize
-            try {
-                if (this.bot && this.bot.client) {
-                    const numDetails = await this.bot.client.getNumberId(number);
-                    if (numDetails && numDetails._serialized) {
-                        chatId = numDetails._serialized;
-                    } else {
-                        chatId = `${number}@c.us`;
-                    }
-                } else {
-                    chatId = `${number}@c.us`;
-                }
-            } catch (e) {
-                chatId = `${number}@c.us`;
-            }
+            // استخدام @c.us مباشرة بدلاً من getNumberId الذي يُرجع @lid ويتسبب في فشل الإرسال
+            chatId = `${number}@c.us`;
         }
 
         // فاصل تزييني
