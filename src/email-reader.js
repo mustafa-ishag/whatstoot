@@ -8,8 +8,6 @@
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const { PDFDocument } = require('pdf-lib');
-let sharp;
-try { sharp = require('sharp'); } catch (e) {}
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
@@ -186,9 +184,13 @@ class EmailReader {
      * معالجة رسالة بريد واحدة
      */
     async _processEmail(client, uid) {
-        // جلب محتوى الرسالة
-        const download = await client.download(uid, undefined, { uid: true });
-        const parsed = await simpleParser(download.content);
+        // جلب المحتوى الخام للرسالة كاملاً بشكل مضمون ومباشر
+        const message = await client.fetchOne(uid, { source: true }, { uid: true });
+        if (!message || !message.source) {
+            console.log(`📧 ⚠️ لم يتم العثور على محتوى الرسالة ${uid}`);
+            return;
+        }
+        const parsed = await simpleParser(message.source);
 
         const subject = parsed.subject || 'بدون موضوع';
         const from = parsed.from?.text || 'Unknown';
@@ -197,14 +199,23 @@ class EmailReader {
         console.log(`📧 📩 رسالة من: ${from}`);
         console.log(`📧 📋 الموضوع: ${subject}`);
 
-        // استخراج رقم أمر العمل من الموضوع
-        const woMatch = subject.match(this.woPattern);
-        const workOrder = woMatch ? woMatch[0] : null;
+        // استخراج رقم أمر العمل من الموضوع أو النص أو كود HTML
+        let workOrder = null;
+        const woMatchSubject = subject.match(this.woPattern);
+        if (woMatchSubject) {
+            workOrder = woMatchSubject[0];
+        } else if (parsed.text) {
+            const woMatchText = parsed.text.match(this.woPattern);
+            if (woMatchText) workOrder = woMatchText[0];
+        } else if (parsed.html) {
+            const woMatchHtml = String(parsed.html).match(this.woPattern);
+            if (woMatchHtml) workOrder = woMatchHtml[0];
+        }
 
         if (workOrder) {
             console.log(`📧 🎯 رقم أمر العمل: ${workOrder}`);
         } else {
-            console.log(`📧 ⚠️ لم يُعثر على رقم أمر عمل في الموضوع`);
+            console.log(`📧 ⚠️ لم يُعثر على رقم أمر عمل في الموضوع أو النص`);
         }
 
         // استخراج المرفقات
@@ -222,41 +233,62 @@ class EmailReader {
 
         for (const att of attachments) {
             const mime = (att.contentType || '').toLowerCase();
-            const filename = att.filename || `attachment_${Date.now()}`;
+            const filename = att.filename || (att.contentType?.params?.name) || `attachment_${Date.now()}`;
             const ext = path.extname(filename).toLowerCase();
 
-            const isPdf = mime.includes('pdf') || ext === '.pdf';
+            // التأكد من تحويل المحتوى إلى Buffer سليم
+            let contentBuf = att.content;
+            if (typeof contentBuf === 'string') {
+                contentBuf = Buffer.from(contentBuf, 'base64');
+            }
+
+            // فحص هل المرفق PDF عبر: النوع المكتوب، الامتداد، أو البايتات السحرية (%PDF-)
+            const hasPdfHeader = contentBuf && Buffer.isBuffer(contentBuf) && contentBuf.length >= 4 && contentBuf.subarray(0, 4).toString() === '%PDF';
+            const isPdf = mime.includes('pdf') || ext === '.pdf' || hasPdfHeader;
             const isImage = mime.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].includes(ext);
 
             if (isPdf) {
-                pdfs.push({ data: att.content, filename });
-                console.log(`📧   📄 PDF: ${filename} (${this._formatSize(att.size)})`);
+                pdfs.push({ data: contentBuf, filename });
+                console.log(`📧   📄 PDF: ${filename} (${this._formatSize(att.size || contentBuf?.length)})`);
             } else if (isImage) {
-                images.push({ data: att.content, mime: mime.startsWith('image/') ? mime : 'image/jpeg', filename });
-                console.log(`📧   🖼 صورة: ${filename} (${this._formatSize(att.size)})`);
+                images.push({ data: contentBuf, mime: mime.startsWith('image/') ? mime : 'image/jpeg', filename });
+                console.log(`📧   🖼 صورة: ${filename} (${this._formatSize(att.size || contentBuf?.length)})`);
             } else {
                 console.log(`📧   ⏩ تجاهل: ${filename} (${mime})`);
+            }
+        }
+
+        // إذا لم يُعثر على رقم أمر العمل، نفحص أسماء ملفات الـ PDF
+        if (!workOrder && pdfs.length > 0) {
+            for (const p of pdfs) {
+                const m = p.filename.match(this.woPattern);
+                if (m) {
+                    workOrder = m[0];
+                    console.log(`📧 🎯 تم استخراج رقم أمر العمل من اسم ملف الـ PDF: ${workOrder}`);
+                    break;
+                }
             }
         }
 
         // قائمة ملفات PDF النهائية للإرسال
         const pdfFilesToSend = [];
 
-        // 1. حفظ ملفات PDF المرفقة مباشرة
+        // 1. حفظ ملفات PDF المرفقة الأصلية مباشرة
         for (const pdf of pdfs) {
             let cleanFilename = this._sanitizeFilename(pdf.filename);
             if (!cleanFilename.toLowerCase().endsWith('.pdf')) {
                 cleanFilename += '.pdf';
             }
-            const pdfName = workOrder
+            const pdfName = workOrder && !cleanFilename.startsWith(workOrder)
                 ? `${workOrder}_${cleanFilename}`
                 : cleanFilename;
             const pdfPath = path.join(this.tempPath, pdfName);
-            fs.writeFileSync(pdfPath, pdf.data);
+            const pdfBuffer = Buffer.isBuffer(pdf.data) ? pdf.data : Buffer.from(pdf.data);
+            fs.writeFileSync(pdfPath, pdfBuffer);
             pdfFilesToSend.push({ path: pdfPath, name: pdfName });
         }
 
-        // 2. دمج الصور في ملف PDF واحد
+        // 2. دمج الصور في ملف PDF واحد (بدون ضغط، بالأبعاد والجودة الأصلية)
         if (images.length > 0) {
             try {
                 const imagesPdfName = workOrder
@@ -317,7 +349,7 @@ class EmailReader {
     }
 
     /**
-     * دمج مجموعة صور في ملف PDF واحد مع تحسين وضغط الصور تلقائياً
+     * دمج مجموعة صور في ملف PDF واحد بدون ضغط أو تقليل جودة (بالجودة والأبعاد الأصلية)
      */
     async _mergeImagesToPdf(images, outputPath) {
         const pdfDoc = await PDFDocument.create();
@@ -325,52 +357,36 @@ class EmailReader {
         for (const img of images) {
             try {
                 let embeddedImage;
-                let processedData = img.data;
                 const mime = (img.mime || '').toLowerCase();
-                let isJpeg = mime.includes('jpeg') || mime.includes('jpg');
+                const isPng = mime.includes('png') || (img.filename && img.filename.toLowerCase().endsWith('.png'));
 
-                // تحسين وضغط الصورة عبر sharp إذا كانت متوفرة لتقليل حجم الـ PDF بنسبة 70-85%
-                if (sharp) {
+                if (isPng) {
                     try {
-                        processedData = await sharp(img.data)
-                            .rotate() // تصحيح دوران الصورة تلقائياً حسب بيانات EXIF
-                            .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
-                            .jpeg({ quality: 80, progressive: true })
-                            .toBuffer();
-                        isJpeg = true;
-                    } catch (optErr) {
-                        console.warn(`📧 ⚠️ تعذر تحسين الصورة عبر sharp (${img.filename})، استخدام الأصل:`, optErr.message);
-                        processedData = img.data;
+                        embeddedImage = await pdfDoc.embedPng(img.data);
+                    } catch (pngErr) {
+                        embeddedImage = await pdfDoc.embedJpg(img.data);
                     }
-                }
-
-                if (isJpeg) {
-                    embeddedImage = await pdfDoc.embedJpg(processedData);
-                } else if (mime.includes('png')) {
-                    embeddedImage = await pdfDoc.embedPng(processedData);
                 } else {
                     try {
-                        embeddedImage = await pdfDoc.embedJpg(processedData);
-                    } catch (e) {
-                        console.log(`📧 ❌ تعذر دمج الصورة: ${img.filename}`);
-                        continue;
+                        embeddedImage = await pdfDoc.embedJpg(img.data);
+                    } catch (jpgErr) {
+                        embeddedImage = await pdfDoc.embedPng(img.data);
                     }
                 }
 
-                // إنشاء صفحة بحجم الصورة
+                // مقاسات الصورة الأصلية بالكامل بدون أي ضغط أو تقليص جودة
                 const { width, height } = embeddedImage.scale(1);
 
-                // تحديد حجم الصفحة — A4 أو حجم الصورة أيهما أكبر
-                const pageWidth = Math.max(width, 595);  // A4 width
-                const pageHeight = Math.max(height, 842); // A4 height
+                // حجم الصفحة مطابق لحجم الصورة تماماً
+                const pageWidth = Math.max(width, 595);
+                const pageHeight = Math.max(height, 842);
 
                 const page = pdfDoc.addPage([pageWidth, pageHeight]);
 
-                // رسم الصورة في منتصف الصفحة
                 const scale = Math.min(
                     (pageWidth - 40) / width,
                     (pageHeight - 40) / height,
-                    1 // لا تكبّر أكثر من الحجم الأصلي
+                    1
                 );
 
                 const scaledWidth = width * scale;
@@ -525,7 +541,9 @@ class EmailReader {
      * تنظيف اسم الملف
      */
     _sanitizeFilename(name) {
-        return (name || '').replace(/[\\/:*?"<>|]/g, '_').trim() || `attachment_${Date.now()}.pdf`;
+        let clean = (name || '').replace(/^["']|["']$/g, '').replace(/[\\/:*?"<>|\r\n\t]/g, '_').trim();
+        if (!clean) clean = `attachment_${Date.now()}.pdf`;
+        return clean;
     }
 
     /**

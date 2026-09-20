@@ -464,20 +464,25 @@ class WhatsAppBot extends EventEmitter {
                         delete cleanOptions.sendMediaAsSticker;
                         delete cleanOptions.extraOptions;
 
+                        const docFilename = options.filename || mediaInfo.filename || 'document.pdf';
                         const message = {
                             ...cleanOptions,
+                            ...ephemeralFields,
+                            ...rawMediaData,
                             ack: 0,
                             body: options.caption || (isSticker ? undefined : mediaOptions.preview) || '',
-                            caption: options.caption,
+                            caption: options.caption || '',
+                            filename: docFilename,
+                            title: docFilename,
+                            mimetype: mediaInfo.mimetype || rawMediaData.mimetype || 'application/pdf',
+                            size: rawMediaData.size || mediaInfo.filesize,
                             from: from,
                             to: chat.id,
                             local: true,
                             self: 'out',
                             t: parseInt(new Date().getTime() / 1000),
                             isNewMsg: true,
-                            type: isDoc ? 'document' : (mediaOptions.type || 'image'),
-                            ...ephemeralFields,
-                            ...rawMediaData,
+                            type: isDoc ? 'document' : (rawMediaData.type || mediaOptions.type || 'image'),
                             id: newMsgKey // تثبيت newMsgKey في النهاية بشكل صارم
                         };
 
@@ -610,7 +615,9 @@ class WhatsAppBot extends EventEmitter {
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
                 const res = await this.client.sendMessage(targetId, media, {
-                    sendMediaAsDocument: true
+                    sendMediaAsDocument: true,
+                    filename: filename,
+                    caption: filename
                 });
                 console.log(`✅ تم تسليم المستند بنجاح إلى ${targetId}: ${filename || path.basename(filePath)}`);
                 return res;
@@ -629,10 +636,10 @@ class WhatsAppBot extends EventEmitter {
     /**
      * معالج الرسائل الرئيسي
      */
-    async _handleMessage(msg) {
+    async _handleMessage(msg, isHistoric = false) {
         try {
             this.stats.messagesReceived++;
-            console.log(`📥 رسالة جديدة: من=${msg.from}, من_تلقائي=${msg.fromMe}, النوع=${msg.type}, النص=${msg.body ? msg.body.substring(0, 30) : ''}`);
+            console.log(`📥 رسالة ${isHistoric ? 'سابقة' : 'جديدة'}: من=${msg.from}, من_تلقائي=${msg.fromMe}, النوع=${msg.type}, النص=${msg.body ? msg.body.substring(0, 30) : ''}`);
             
             // تجاهل الرسائل التلقائية المرسلة بواسطة البوت نفسه لتفادي الحلقات التكرارية
             if (msg.fromMe) {
@@ -680,10 +687,7 @@ class WhatsAppBot extends EventEmitter {
                         if (row && row.group_name) {
                             groupName = row.group_name;
                         } else {
-                            // محاولة أخيرة هادئة بدون تحذير
-                            const chat = await msg.getChat().catch(() => null);
-                            if (chat && chat.name) groupName = chat.name;
-                            else groupName = groupId.split('@')[0];
+                            groupName = groupId.split('@')[0];
                         }
                     }
                 } catch (dbErr) {
@@ -697,30 +701,25 @@ class WhatsAppBot extends EventEmitter {
                 db.saveGroup(groupId, groupName);
             } catch (e) {}
 
-            // فحص إذا كانت المجموعة مراقبة
-            if (this.monitoredGroups !== 'all') {
+            // فحص هل المجموعة مراقبة
+            if (this.monitoredGroups && this.monitoredGroups !== 'all') {
                 const groups = Array.isArray(this.monitoredGroups)
                     ? this.monitoredGroups
-                    : this.monitoredGroups.split(',').map(g => g.trim());
-                if (!groups.includes(groupId) && !groups.includes(groupName)) return;
-            }
-
-            let senderName = 'Unknown';
-            let senderId = msg.author || msg.from || 'Unknown';
-            try {
-                const contact = await msg.getContact();
-                senderName = contact.pushname || contact.number || 'Unknown';
-            } catch (err) {
-                if (senderId) {
-                    senderName = senderId.split('@')[0];
+                    : this.monitoredGroups.split(',').map(name => name.trim());
+                if (!groups.includes(groupId) && !groups.includes(groupName)) {
+                    return;
                 }
             }
 
+            // استخراج اسم المرسل
+            let senderName = msg._data?.notifyName || msg.author || msg.from;
+            let senderId = msg.author || msg.from;
+
             // =============================================
-            // 🖼 معالجة الميديا (صور + فيديو + PDF)
+            // 📎 معالجة الميديا (صور، فيديو، PDF)
             // =============================================
             if (msg.hasMedia) {
-                const media = await this._downloadMediaWithRetry(msg, 3, 3000);
+                const media = await this._downloadMediaWithRetry(msg);
                 if (!media) {
                     console.log('⚠️ فشل تحميل الميديا بعد عدة محاولات');
                     this.stats.errors++;
@@ -788,7 +787,7 @@ class WhatsAppBot extends EventEmitter {
                     message_id: msg.id._serialized,
                 };
 
-                this._enqueueImage(payload, msg.from);
+                this._enqueueImage(payload, msg.from, isHistoric);
                 return;
             }
 
@@ -798,8 +797,10 @@ class WhatsAppBot extends EventEmitter {
             const text = msg.body?.trim();
             if (!text) return;
 
-            // أوامر البوت
-            if (await this._handleBotCommands(text, msg, groupId, senderName, senderId)) return;
+            // أوامر البوت (لا تُنفذ على الرسائل القديمة أثناء إعادة التشغيل)
+            if (!isHistoric) {
+                if (await this._handleBotCommands(text, msg, groupId, senderName, senderId)) return;
+            }
 
             // فحص إذا كان النص يحتوي رقم أمر عمل
             if (!this.woPattern.test(text)) return;
@@ -827,7 +828,10 @@ class WhatsAppBot extends EventEmitter {
                 console.log(`✅ رقم أمر العمل: ${result.work_order}`);
                 if (result.queued_images_updated > 0) {
                     console.log(`📎 تم ربط ${result.queued_images_updated} صورة معلّقة`);
-                    await msg.reply(`📎 تم ربط ${result.queued_images_updated} صورة بأمر العمل ${result.work_order}`);
+                    // إرسال الرد للمجموعة فقط في حالة الرسائل الجديدة وليس التاريخية
+                    if (!isHistoric) {
+                        await msg.reply(`📎 تم ربط ${result.queued_images_updated} صورة بأمر العمل ${result.work_order}`);
+                    }
                 }
             }
 
@@ -919,9 +923,9 @@ class WhatsAppBot extends EventEmitter {
     // 📦 نظام الطابور التتابعي
     // =============================================
 
-    _enqueueImage(payload, chatId) {
-        this.uploadQueue.push({ payload, chatId, retries: 0 });
-        console.log(`📥 صورة أُضيفت للطابور (الحجم: ${this.uploadQueue.length})`);
+    _enqueueImage(payload, chatId, silent = false) {
+        this.uploadQueue.push({ payload, chatId, retries: 0, silent });
+        console.log(`📥 صورة أُضيفت للطابور (الحجم: ${this.uploadQueue.length}) ${silent ? '[صامت]' : ''}`);
         this._processQueue();
     }
 
@@ -933,7 +937,7 @@ class WhatsAppBot extends EventEmitter {
 
         while (this.uploadQueue.length > 0) {
             const item = this.uploadQueue.shift();
-            const { payload, chatId, retries } = item;
+            const { payload, chatId, retries, silent } = item;
 
             try {
                 // ✨ استدعاء مباشر بدلاً من HTTP
@@ -941,7 +945,7 @@ class WhatsAppBot extends EventEmitter {
 
                 if (result && result.success) {
                     console.log(`✅ ${result.action}: ${result.message || ''}`);
-                    this._handleUploadResult(result, payload, chatId);
+                    this._handleUploadResult(result, payload, chatId, silent);
                 } else {
                     const errorMsg = result?.message || 'Unknown error';
                     console.error(`❌ Processing Error: ${errorMsg}`);
@@ -949,7 +953,7 @@ class WhatsAppBot extends EventEmitter {
                     if (retries < this.MAX_RETRIES && this._isRetryableError(errorMsg)) {
                         console.log(`🔄 إعادة المحاولة ${retries + 1}/${this.MAX_RETRIES}...`);
                         await this._sleep(this.RETRY_DELAY_MS);
-                        this.uploadQueue.unshift({ payload, chatId, retries: retries + 1 });
+                        this.uploadQueue.unshift({ payload, chatId, retries: retries + 1, silent });
                     } else {
                         this.stats.errors++;
                         console.error(`💀 فشل نهائي بعد ${retries} محاولة`);
@@ -968,41 +972,45 @@ class WhatsAppBot extends EventEmitter {
         this.isProcessing = false;
     }
 
-    _handleUploadResult(result, payload, chatId) {
+    _handleUploadResult(result, payload, chatId, silent = false) {
         if (result.action === 'uploaded' && result.work_order) {
-            const batchKey = `${payload.group_id}_${result.work_order}`;
+            if (silent) {
+                console.log(`🤫 معالجة صامتة لملف سابق (بدون إرسال رسالة للمجموعة): ${result.file_name} لأمر العمل ${result.work_order}`);
+            } else {
+                const batchKey = `${payload.group_id}_${result.work_order}`;
 
-            if (!this.uploadBatches.has(batchKey)) {
-                this.uploadBatches.set(batchKey, {
-                    workOrder: result.work_order,
-                    count: 0,
-                    files: [],
-                    chatId,
-                    timer: null,
-                });
+                if (!this.uploadBatches.has(batchKey)) {
+                    this.uploadBatches.set(batchKey, {
+                        workOrder: result.work_order,
+                        count: 0,
+                        files: [],
+                        chatId,
+                        timer: null,
+                    });
+                }
+
+                const batch = this.uploadBatches.get(batchKey);
+                batch.count++;
+                batch.files.push(result.file_name);
+
+                if (batch.timer) clearTimeout(batch.timer);
+                batch.timer = setTimeout(async () => {
+                    try {
+                        const mediaWord = batch.count === 1 ? 'ملف' : 'ملفات';
+                        const summary = batch.count === 1
+                            ? `✅ تم رفع ملف واحد بنجاح\n📁 أمر العمل: ${batch.workOrder}`
+                            : `✅ تم رفع ${batch.count} ${mediaWord} بنجاح\n📁 أمر العمل: ${batch.workOrder}`;
+
+                        await this.sendMessage(batch.chatId, summary);
+                        console.log(`📨 ملخص مُرسل: ${batch.count} صورة لأمر العمل ${batch.workOrder}`);
+                    } catch (e) {
+                        console.error('❌ خطأ إرسال ملخص:', e.message);
+                    }
+                    this.uploadBatches.delete(batchKey);
+                }, this.BATCH_DELAY_MS);
             }
 
-            const batch = this.uploadBatches.get(batchKey);
-            batch.count++;
-            batch.files.push(result.file_name);
-
-            if (batch.timer) clearTimeout(batch.timer);
-            batch.timer = setTimeout(async () => {
-                try {
-                    const mediaWord = batch.count === 1 ? 'ملف' : 'ملفات';
-                    const summary = batch.count === 1
-                        ? `✅ تم رفع ملف واحد بنجاح\n📁 أمر العمل: ${batch.workOrder}`
-                        : `✅ تم رفع ${batch.count} ${mediaWord} بنجاح\n📁 أمر العمل: ${batch.workOrder}`;
-
-                    await this.sendMessage(batch.chatId, summary);
-                    console.log(`📨 ملخص مُرسل: ${batch.count} صورة لأمر العمل ${batch.workOrder}`);
-                } catch (e) {
-                    console.error('❌ خطأ إرسال ملخص:', e.message);
-                }
-                this.uploadBatches.delete(batchKey);
-            }, this.BATCH_DELAY_MS);
-
-            } else if (result.action === 'queued') {
+        } else if (result.action === 'queued') {
             console.log('⏳ الصورة في الطابور...');
         } else if (result.action === 'skipped') {
             console.log('⚠️ صورة مكررة — تم التخطي');
@@ -1238,7 +1246,7 @@ class WhatsAppBot extends EventEmitter {
 
                         try {
                             const msg = new Message(this.client, rawMsg);
-                            await this._handleMessage(msg);
+                            await this._handleMessage(msg, true);
                             groupProcessedCount++;
                             totalProcessed++;
                         } catch (msgErr) {
