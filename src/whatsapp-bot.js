@@ -55,7 +55,6 @@ class WhatsAppBot extends EventEmitter {
         // عميل واتساب
         this.client = new Client({
             authTimeoutMs: 120000,
-            takeoverOnConflict: true,
             authStrategy: new LocalAuth({
                 dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
             }),
@@ -139,10 +138,11 @@ class WhatsAppBot extends EventEmitter {
                 return;
             }
 
-            console.log('🔄 جاري محاولة إعادة الاتصال خلال 5 ثوانٍ...');
+            console.log('🔄 جاري إعادة إنشاء عميل واتساب خلال 5 ثوانٍ...');
             setTimeout(() => {
                 try {
-                    this.client.initialize();
+                    this.recreateClient();
+                    this.initialize();
                 } catch (e) {
                     console.error('❌ فشل إعادة الاتصال:', e.message);
                 }
@@ -200,7 +200,6 @@ class WhatsAppBot extends EventEmitter {
 
         this.client = new Client({
             authTimeoutMs: 120000,
-            takeoverOnConflict: true,
             authStrategy: new LocalAuth({
                 dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
             }),
@@ -368,48 +367,8 @@ class WhatsAppBot extends EventEmitter {
                     };
                 }
 
-                // 4. إصلاح خطأ No LID for user في دوال هجرة المعرفات (WAWebLidMigrationUtils & WAWebLid1X1MigrationGating)
-                const LidUtils = window.require?.('WAWebLidMigrationUtils');
-                if (LidUtils) {
-                    for (const key of Object.keys(LidUtils)) {
-                        if (typeof LidUtils[key] === 'function' && !LidUtils['__orig_' + key]) {
-                            const origFn = LidUtils[key];
-                            LidUtils['__orig_' + key] = origFn;
-                            LidUtils[key] = function(...args) {
-                                try {
-                                    return origFn.apply(this, args);
-                                } catch (err) {
-                                    if (err.message && (err.message.includes('No LID for user') || err.message.includes('LID'))) {
-                                        return args[0]; // الرجوع للمعرف الأصلي WID
-                                    }
-                                    throw err;
-                                }
-                            };
-                        }
-                    }
-                }
-
-                const Lid1X1 = window.require?.('WAWebLid1X1MigrationGating');
-                if (Lid1X1) {
-                    for (const key of Object.keys(Lid1X1)) {
-                        if (typeof Lid1X1[key] === 'function' && !Lid1X1['__orig_' + key]) {
-                            const origFn = Lid1X1[key];
-                            Lid1X1['__orig_' + key] = origFn;
-                            Lid1X1[key] = function(...args) {
-                                try {
-                                    return origFn.apply(this, args);
-                                } catch (err) {
-                                    if (err.message && (err.message.includes('No LID for user') || err.message.includes('LID'))) {
-                                        return false;
-                                    }
-                                    throw err;
-                                }
-                            };
-                        }
-                    }
-                }
             });
-            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize & LID بنجاح');
+            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize بنجاح');
         } catch (e) {
             if (e.message && (e.message.includes('Execution context was destroyed') || e.message.includes('Cannot find context')) && retries > 0) {
                 await new Promise(r => setTimeout(r, 1500));
@@ -423,7 +382,16 @@ class WhatsAppBot extends EventEmitter {
      * إرسال رسالة نصية (يُستخدم من QueueWorker و EmailReader و API) مع إعادة المحاولة واستعادة سياق التنفيذ
      */
     async sendMessage(chatId, message, retries = 3) {
-        if (!this.isClientReady) return;
+        if (!this.isClientReady) {
+            // انتظار حتى 15 ثانية في حال كان العميل في طور إعادة الاتصال
+            for (let i = 0; i < 15; i++) {
+                await new Promise(r => setTimeout(r, 1000));
+                if (this.isClientReady) break;
+            }
+            if (!this.isClientReady) {
+                throw new Error('عميل واتساب غير متصل حالياً');
+            }
+        }
 
         let targetId = String(chatId).trim();
         if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
@@ -442,7 +410,6 @@ class WhatsAppBot extends EventEmitter {
 
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                await this._applyPuppeteerFixes();
                 return await this.client.sendMessage(targetId, message);
             } catch (err) {
                 const isRecoverable = err.message && (
@@ -451,11 +418,13 @@ class WhatsAppBot extends EventEmitter {
                     err.message.includes('id property') ||
                     err.message.includes('LID') ||
                     err.message.includes('getChat') ||
-                    err.message.includes('Protocol error')
+                    err.message.includes('Protocol error') ||
+                    err.message.includes('WWebJS')
                 );
 
                 if (isRecoverable && attempt < retries) {
                     console.warn(`⚠️ محاولة إرسال رسالة ثانية (${attempt}/${retries}) بعد ثانيتين... السبب: ${err.message}`);
+                    await this._applyPuppeteerFixes();
                     await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
@@ -469,7 +438,14 @@ class WhatsAppBot extends EventEmitter {
      */
     async sendMediaDocument(chatId, filePath, filename, retries = 3) {
         if (!this.isClientReady) {
-            throw new Error('عميل واتساب غير متصل حالياً');
+            // انتظار حتى 15 ثانية في حال كان العميل في طور إعادة الاتصال
+            for (let i = 0; i < 15; i++) {
+                await new Promise(r => setTimeout(r, 1000));
+                if (this.isClientReady) break;
+            }
+            if (!this.isClientReady) {
+                throw new Error('عميل واتساب غير متصل حالياً');
+            }
         }
 
         const { MessageMedia } = require('whatsapp-web.js');
@@ -503,7 +479,6 @@ class WhatsAppBot extends EventEmitter {
         // إرسال الملف مع إعادة المحاولة وحماية سياق التنفيذ
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                await this._applyPuppeteerFixes();
                 return await this.client.sendMessage(targetId, media, {
                     sendMediaAsDocument: true
                 });
@@ -515,11 +490,13 @@ class WhatsAppBot extends EventEmitter {
                     err.message.includes('No LID for user') ||
                     err.message.includes('LID') ||
                     err.message.includes('getChat') ||
-                    err.message.includes('Protocol error')
+                    err.message.includes('Protocol error') ||
+                    err.message.includes('WWebJS')
                 );
 
                 if (isRecoverable && attempt < retries) {
                     console.warn(`⚠️ محاولة إرسال مستند ثانية (${attempt}/${retries}) بعد ثانيتين... السبب: ${err.message}`);
+                    await this._applyPuppeteerFixes();
                     await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }

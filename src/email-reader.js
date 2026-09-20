@@ -38,6 +38,9 @@ class EmailReader {
         if (!fs.existsSync(this.tempPath)) {
             fs.mkdirSync(this.tempPath, { recursive: true });
         }
+
+        this.isChecking = false;
+        this.failedUids = new Map();
     }
 
     /**
@@ -89,10 +92,16 @@ class EmailReader {
      * فحص البريد — الدالة الرئيسية
      */
     async checkEmails() {
-        if (!this.bot.isClientReady) {
+        if (this.isChecking) {
+            return;
+        }
+
+        if (!this.bot || !this.bot.isClientReady) {
             console.log('📧 ⏳ واتساب غير جاهز — تأجيل فحص البريد');
             return;
         }
+
+        this.isChecking = true;
 
         const client = new ImapFlow({
             host: config.EMAIL_IMAP_HOST,
@@ -167,6 +176,7 @@ class EmailReader {
             } catch (e) {
                 // تجاهل أخطاء تسجيل الخروج
             }
+            this.isChecking = false;
         }
     }
 
@@ -176,14 +186,6 @@ class EmailReader {
     async _processEmail(client, uid) {
         // جلب محتوى الرسالة
         const download = await client.download(uid, undefined, { uid: true });
-        
-        // تعليم الرسالة كمقروءة مبكراً جداً لمنع تكرار الإرسال في حال حدوث تأخير أو خطأ في واتساب
-        try {
-            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-        } catch (e) {
-            console.error('📧 ⚠️ خطأ أثناء تعليم الرسالة كمقروءة:', e.message);
-        }
-
         const parsed = await simpleParser(download.content);
 
         const subject = parsed.subject || 'بدون موضوع';
@@ -270,21 +272,43 @@ class EmailReader {
             }
         }
 
-        // 3. إرسال ملفات PDF عبر واتساب
-        if (pdfFilesToSend.length > 0) {
-            await this._sendPdfsViaWhatsApp(pdfFilesToSend, workOrder, subject);
-        } else {
-            console.log('📧 ⚠️ لا توجد ملفات PDF للإرسال');
-        }
+        try {
+            // 3. إرسال ملفات PDF عبر واتساب
+            if (pdfFilesToSend.length > 0) {
+                await this._sendPdfsViaWhatsApp(pdfFilesToSend, workOrder, subject);
+            } else {
+                console.log('📧 ⚠️ لا توجد ملفات PDF للإرسال');
+            }
 
-        // 4. أرشفة الملفات في Synology Drive
-        if (workOrder && pdfFilesToSend.length > 0 && this.uploader) {
-            await this._archiveToSynology(pdfFilesToSend, workOrder);
-        }
+            // 4. أرشفة الملفات في Synology Drive
+            if (workOrder && pdfFilesToSend.length > 0 && this.uploader) {
+                await this._archiveToSynology(pdfFilesToSend, workOrder);
+            }
 
-        // 5. حذف الملفات المؤقتة
-        for (const file of pdfFilesToSend) {
-            this._safeUnlink(file.path);
+            // تعليم الرسالة كمقروءة فقط بعد نجاح الإرسال والأرشفة
+            try {
+                await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+                this.failedUids.delete(uid);
+            } catch (e) {
+                console.error('📧 ⚠️ خطأ أثناء تعليم الرسالة كمقروءة:', e.message);
+            }
+
+        } catch (err) {
+            const failCount = (this.failedUids.get(uid) || 0) + 1;
+            this.failedUids.set(uid, failCount);
+            if (failCount >= 3) {
+                console.error(`📧 ⚠️ فشلت معالجة الرسالة ${uid} لـ 3 مرات متتالية — سيتم تعليمها كمقروءة لتفادي التكرار`);
+                try {
+                    await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+                } catch (e) {}
+                this.failedUids.delete(uid);
+            }
+            throw err;
+        } finally {
+            // 5. حذف الملفات المؤقتة دائماً
+            for (const file of pdfFilesToSend) {
+                this._safeUnlink(file.path);
+            }
         }
 
         console.log(`📧 ══════════════════════════════════════\n`);
@@ -397,13 +421,17 @@ class EmailReader {
             console.log(`📧 📨 رسالة تعريفية مُرسلة إلى ${target}`);
         } catch (err) {
             console.error('📧 ❌ خطأ إرسال رسالة تعريفية:', err.message);
+            throw new Error(`فشل إرسال الرسالة التعريفية عبر واتساب: ${err.message}`);
         }
+
+        let failedFiles = [];
 
         // إرسال كل ملف PDF عبر الدالة المحدثة والمحمية ضد أخطاء memoize
         for (const file of pdfFiles) {
             try {
                 if (!fs.existsSync(file.path)) {
                     console.error(`📧 ❌ الملف غير موجود للإرسال: ${file.path}`);
+                    failedFiles.push(file.name);
                     continue;
                 }
 
@@ -426,7 +454,12 @@ class EmailReader {
                 console.error(`📧 ❌ خطأ إرسال ${file.name}:`, err.message);
                 this.logger.error(`WhatsApp send error for ${file.name}: ${err.message}`);
                 this.stats.errors++;
+                failedFiles.push(file.name);
             }
+        }
+
+        if (failedFiles.length > 0) {
+            throw new Error(`فشل إرسال ${failedFiles.length} ملف عبر واتساب: ${failedFiles.join(', ')}`);
         }
 
         this.logger.info(`Sent ${pdfFiles.length} PDF(s) for WO ${workOrder || 'N/A'} to ${target}`);
