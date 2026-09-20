@@ -87,6 +87,7 @@ class WhatsAppBot extends EventEmitter {
      */
     _setupEvents() {
         this.client.on('loading_screen', (percent) => {
+            this.isClientReady = false;
             console.log(`\n⏳ جاري تحميل واتساب ويب... ${percent}%`);
         });
 
@@ -149,7 +150,7 @@ class WhatsAppBot extends EventEmitter {
             }, 5000);
         });
 
-        this.client.on('message', (msg) => this._handleMessage(msg));
+        this.client.on('message_create', (msg) => this._handleMessage(msg));
     }
 
     /**
@@ -268,10 +269,18 @@ class WhatsAppBot extends EventEmitter {
 
                         try {
                             const WidFactory = window.require?.('WAWebWidFactory');
-                            const chatWid = WidFactory ? WidFactory.createWid(chatId) : chatId;
+                            let chatWid = WidFactory ? WidFactory.createWid(chatId) : chatId;
                             const ChatCol = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
                             let chat = ChatCol ? ChatCol.get(chatWid) : null;
                             if (!chat) {
+                                // استعلام وجود الرقم على الخادم لتحميل الـ LID وجهة الاتصال في الذاكرة
+                                const QueryExists = window.require?.('WAWebQueryExistsJob');
+                                if (QueryExists && QueryExists.queryExists) {
+                                    try {
+                                        const qRes = await QueryExists.queryExists(chatWid);
+                                        if (qRes && qRes.wid) chatWid = qRes.wid;
+                                    } catch (qe) {}
+                                }
                                 const FindChat = window.require?.('WAWebFindChatAction');
                                 if (FindChat) {
                                     chat = (await FindChat.findOrCreateLatestChat(chatWid))?.chat;
@@ -395,7 +404,12 @@ class WhatsAppBot extends EventEmitter {
 
         let targetId = String(chatId).trim();
         if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
-            const cleanNumber = targetId.replace(/[^0-9]/g, '');
+            let cleanNumber = targetId.replace(/[^0-9]/g, '');
+            if (cleanNumber.startsWith('05') && cleanNumber.length === 10) {
+                cleanNumber = '966' + cleanNumber.substring(1);
+            } else if (cleanNumber.startsWith('5') && cleanNumber.length === 9) {
+                cleanNumber = '966' + cleanNumber;
+            }
             try {
                 const numId = await this.client.getNumberId(cleanNumber);
                 if (numId && numId._serialized) {
@@ -410,7 +424,11 @@ class WhatsAppBot extends EventEmitter {
 
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                return await this.client.sendMessage(targetId, message);
+                const res = await this.client.sendMessage(targetId, message, { waitUntilMsgSent: true });
+                if (!res) {
+                    throw new Error(`فشل إرسال الرسالة إلى ${targetId} — لم يتم العثور على المحادثة أو تعذر تسليمها`);
+                }
+                return res;
             } catch (err) {
                 const isRecoverable = err.message && (
                     err.message.includes('Execution context was destroyed') ||
@@ -457,8 +475,13 @@ class WhatsAppBot extends EventEmitter {
 
         // تنسيق وجهة الإرسال بدقة
         let targetId = chatId.trim();
-        if (!targetId.includes('@g.us')) {
-            const cleanNumber = targetId.replace(/[^0-9]/g, '');
+        if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
+            let cleanNumber = targetId.replace(/[^0-9]/g, '');
+            if (cleanNumber.startsWith('05') && cleanNumber.length === 10) {
+                cleanNumber = '966' + cleanNumber.substring(1);
+            } else if (cleanNumber.startsWith('5') && cleanNumber.length === 9) {
+                cleanNumber = '966' + cleanNumber;
+            }
             try {
                 const numId = await this.client.getNumberId(cleanNumber);
                 if (numId && numId._serialized) {
@@ -479,9 +502,14 @@ class WhatsAppBot extends EventEmitter {
         // إرسال الملف مع إعادة المحاولة وحماية سياق التنفيذ
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                return await this.client.sendMessage(targetId, media, {
-                    sendMediaAsDocument: true
+                const res = await this.client.sendMessage(targetId, media, {
+                    sendMediaAsDocument: true,
+                    waitUntilMsgSent: true
                 });
+                if (!res) {
+                    throw new Error(`فشل إرسال المستند ${filename || ''} إلى ${targetId} — لم يتم العثور على المحادثة أو تعذر تسليمها`);
+                }
+                return res;
             } catch (err) {
                 const isRecoverable = err.message && (
                     err.message.includes('Execution context was destroyed') ||
@@ -511,8 +539,21 @@ class WhatsAppBot extends EventEmitter {
     async _handleMessage(msg) {
         try {
             this.stats.messagesReceived++;
-            console.log(`📥 رسالة جديدة مستلمة: من=${msg.from}, من_تلقائي=${msg.fromMe}, النوع=${msg.type}, النص=${msg.body ? msg.body.substring(0, 30) : ''}`);
-            if (msg.fromMe) return;
+            console.log(`📥 رسالة جديدة: من=${msg.from}, من_تلقائي=${msg.fromMe}, النوع=${msg.type}, النص=${msg.body ? msg.body.substring(0, 30) : ''}`);
+            
+            // تجاهل الرسائل التلقائية المرسلة بواسطة البوت نفسه لتفادي الحلقات التكرارية
+            if (msg.fromMe) {
+                const body = msg.body || '';
+                if (
+                    body.startsWith('✅ تم رفع') ||
+                    body.startsWith('📎 تم ربط') ||
+                    body.startsWith('📨 ملخص') ||
+                    body.startsWith('▬▬▬▬') ||
+                    body.includes('تم حفظ رقم أمر العمل')
+                ) {
+                    return;
+                }
+            }
 
             // تجاهل رسائل الحالة والمحادثات الفردية مبكراً لتجنب أخطاء Puppeteer (مثل خطأ r: r)
             if (!msg.from || !msg.from.includes('@g.us')) return;
