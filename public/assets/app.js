@@ -286,16 +286,43 @@ function renderUploads(uploads) {
 
         return `
             <tr>
-                <td>${thumbHtml}</td>
-                <td><span class="wo-number">${escapeHtml(u.work_order)}</span></td>
-                <td><span class="file-name" title="${escapeHtml(u.file_name)}">${escapeHtml(u.file_name)}</span></td>
-                <td><span class="group-name" title="${escapeHtml(u.group_name || '')}">${escapeHtml(u.group_name || '—')}</span></td>
-                <td>${escapeHtml(u.sender || '—')}</td>
-                <td><span class="badge ${status.class}">${status.label}</span></td>
-                <td class="time-cell">${time}</td>
-                <td>${driveLink}</td>
+                <td data-label="معاينة">${thumbHtml}</td>
+                <td data-label="أمر العمل"><span class="wo-number">${escapeHtml(u.work_order)}</span></td>
+                <td data-label="اسم الملف"><span class="file-name" title="${escapeHtml(u.file_name)}">${escapeHtml(u.file_name)}</span></td>
+                <td data-label="المجموعة"><span class="group-name" title="${escapeHtml(u.group_name || '')}">${escapeHtml(u.group_name || '—')}</span></td>
+                <td data-label="المرسل">${escapeHtml(u.sender || '—')}</td>
+                <td data-label="الحالة"><span class="badge ${status.class}">${status.label}</span></td>
+                <td data-label="الوقت" class="time-cell">${time}</td>
+                <td data-label="رابط التخزين">${driveLink}</td>
             </tr>`;
     }).join('');
+}
+
+// ── Mobile Drawer Navigation ──
+function toggleMobileMenu() {
+    const drawer = document.getElementById('mobileDrawer');
+    if (!drawer) return;
+    if (drawer.classList.contains('active')) {
+        closeMobileMenu();
+    } else {
+        openMobileMenu();
+    }
+}
+
+function openMobileMenu() {
+    const drawer = document.getElementById('mobileDrawer');
+    const backdrop = document.getElementById('drawerBackdrop');
+    if (drawer) drawer.classList.add('active');
+    if (backdrop) backdrop.classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeMobileMenu() {
+    const drawer = document.getElementById('mobileDrawer');
+    const backdrop = document.getElementById('drawerBackdrop');
+    if (drawer) drawer.classList.remove('active');
+    if (backdrop) backdrop.classList.remove('active');
+    document.body.style.overflow = '';
 }
 
 // =============================================
