@@ -393,7 +393,7 @@ class EmailReader {
         const intro = `${separator}\n🟢 *إسناد جديد*\n${separator}\n\n📋 *${subject}*\n📎 عدد الملفات: ${pdfFiles.length}`;
 
         try {
-            await this.bot.client.sendMessage(chatId, intro);
+            await this.bot.sendMessage(chatId, intro);
             console.log(`📧 📨 رسالة تعريفية مُرسلة إلى ${target}`);
         } catch (err) {
             console.error('📧 ❌ خطأ إرسال رسالة تعريفية:', err.message);

@@ -187,15 +187,57 @@ class WhatsAppBot extends EventEmitter {
     }
 
     /**
-     * تطبيق إصلاحات برمجية مباشرة داخل صفحة واتساب ويب لتفادي أخطاء المكتبة (مثل خطأ memoize id property)
+     * تطبيق إصلاحات برمجية مباشرة داخل صفحة واتساب ويب لتفادي أخطاء المكتبة (مثل خطأ memoize id property و getChat و No LID)
      */
     async _applyPuppeteerFixes() {
         if (!this.client?.pupPage) return;
         try {
+            // 1. التحقق من وجود كائن WWebJS ودواله الأساسية، وإعادة حقنه فوراً إن لم يكن متوفراً
+            const needsInjection = await this.client.pupPage.evaluate(() => {
+                return typeof window.WWebJS === 'undefined' || typeof window.WWebJS.getChat !== 'function';
+            }).catch(() => true);
+
+            if (needsInjection) {
+                const { LoadUtils } = require('whatsapp-web.js/src/util/Injected/Utils');
+                await this.client.pupPage.evaluate(LoadUtils);
+            }
+
             await this.client.pupPage.evaluate(() => {
                 if (!window.WWebJS) return;
 
-                // 1. إصلاح getMessageModel: منع الخطأ إذا فشل serialize بسبب memoize getter
+                // 1. إصلاح getChat لدعم الوصول الآمن للمحادثات ومنع خطأ Cannot read properties of undefined
+                if (window.WWebJS.getChat && !window.WWebJS._origGetChat) {
+                    window.WWebJS._origGetChat = window.WWebJS.getChat;
+                    window.WWebJS.getChat = async function(chatId, options = {}) {
+                        try {
+                            const res = await window.WWebJS._origGetChat(chatId, options);
+                            if (res) return res;
+                        } catch (e) {
+                            // متابعة إلى المحاولة الاحتياطية
+                        }
+
+                        try {
+                            const WidFactory = window.require?.('WAWebWidFactory');
+                            const chatWid = WidFactory ? WidFactory.createWid(chatId) : chatId;
+                            const ChatCol = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
+                            let chat = ChatCol ? ChatCol.get(chatWid) : null;
+                            if (!chat) {
+                                const FindChat = window.require?.('WAWebFindChatAction');
+                                if (FindChat) {
+                                    chat = (await FindChat.findOrCreateLatestChat(chatWid))?.chat;
+                                }
+                            }
+                            if (chat && options.getAsModel && window.WWebJS.getChatModel) {
+                                return await window.WWebJS.getChatModel(chat, { isChannel: /@\w*newsletter\b/.test(chatId) });
+                            }
+                            return chat;
+                        } catch (err) {
+                            return null;
+                        }
+                    };
+                }
+
+                // 2. إصلاح getMessageModel: منع الخطأ إذا فشل serialize بسبب memoize getter
                 if (window.WWebJS.getMessageModel && !window.WWebJS._origGetMessageModel) {
                     window.WWebJS._origGetMessageModel = window.WWebJS.getMessageModel;
                     window.WWebJS.getMessageModel = function(message) {
@@ -219,7 +261,7 @@ class WhatsAppBot extends EventEmitter {
                     };
                 }
 
-                // 2. إصلاح sendMessage: حماية message.id من المسح بسبب mediaOptions.toJSON() والتعامل مع أخطاء LID
+                // 3. إصلاح sendMessage: حماية message.id من المسح بسبب mediaOptions.toJSON() والتعامل مع أخطاء LID
                 if (window.WWebJS.sendMessage && !window.WWebJS._origSendMessage) {
                     window.WWebJS._origSendMessage = window.WWebJS.sendMessage;
                     window.WWebJS.sendMessage = async function(chat, content, options = {}) {
@@ -275,7 +317,7 @@ class WhatsAppBot extends EventEmitter {
                     };
                 }
 
-                // 3. إصلاح خطأ No LID for user في دوال هجرة المعرفات (WAWebLidMigrationUtils & WAWebLid1X1MigrationGating)
+                // 4. إصلاح خطأ No LID for user في دوال هجرة المعرفات (WAWebLidMigrationUtils & WAWebLid1X1MigrationGating)
                 const LidUtils = window.require?.('WAWebLidMigrationUtils');
                 if (LidUtils) {
                     for (const key of Object.keys(LidUtils)) {
@@ -318,17 +360,42 @@ class WhatsAppBot extends EventEmitter {
             });
             console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize & LID بنجاح');
         } catch (e) {
-            // صامت
+            console.error('⚠️ خطأ أثناء تطبيق حماية Puppeteer:', e.message);
         }
     }
 
     /**
-     * إرسال رسالة نصية (يُستخدم من QueueWorker)
+     * إرسال رسالة نصية (يُستخدم من QueueWorker و EmailReader و API)
      */
     async sendMessage(chatId, message) {
         if (!this.isClientReady) return;
-        const id = chatId.includes('@g.us') ? chatId : `${chatId}@g.us`;
-        await this.client.sendMessage(id, message);
+
+        await this._applyPuppeteerFixes();
+
+        let targetId = String(chatId).trim();
+        if (!targetId.includes('@g.us') && !targetId.includes('@c.us')) {
+            const cleanNumber = targetId.replace(/[^0-9]/g, '');
+            try {
+                const numId = await this.client.getNumberId(cleanNumber);
+                if (numId && numId._serialized) {
+                    targetId = numId._serialized;
+                } else {
+                    targetId = `${cleanNumber}@c.us`;
+                }
+            } catch (e) {
+                targetId = `${cleanNumber}@c.us`;
+            }
+        }
+
+        try {
+            return await this.client.sendMessage(targetId, message);
+        } catch (err) {
+            if (err.message && (err.message.includes('id property') || err.message.includes('LID') || err.message.includes('getChat'))) {
+                await this._applyPuppeteerFixes();
+                return await this.client.sendMessage(targetId, message);
+            }
+            throw err;
+        }
     }
 
     /**
@@ -376,7 +443,7 @@ class WhatsAppBot extends EventEmitter {
                 sendMediaAsDocument: true
             });
         } catch (err) {
-            if (err.message && (err.message.includes('id property') || err.message.includes('No LID for user') || err.message.includes('LID'))) {
+            if (err.message && (err.message.includes('id property') || err.message.includes('No LID for user') || err.message.includes('LID') || err.message.includes('getChat'))) {
                 // محاولة إضافية عبر إعادة تطبيق الإصلاح والإرسال المباشر
                 await this._applyPuppeteerFixes();
                 return await this.client.sendMessage(targetId, media, {
@@ -742,7 +809,7 @@ class WhatsAppBot extends EventEmitter {
                         ? `✅ تم رفع ملف واحد بنجاح\n📁 أمر العمل: ${batch.workOrder}`
                         : `✅ تم رفع ${batch.count} ${mediaWord} بنجاح\n📁 أمر العمل: ${batch.workOrder}`;
 
-                    await this.client.sendMessage(batch.chatId, summary);
+                    await this.sendMessage(batch.chatId, summary);
                     console.log(`📨 ملخص مُرسل: ${batch.count} صورة لأمر العمل ${batch.workOrder}`);
                 } catch (e) {
                     console.error('❌ خطأ إرسال ملخص:', e.message);

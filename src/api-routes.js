@@ -510,8 +510,9 @@ function register(app, bot, uploader, logger, emailReader) {
                 chatId = `${clean}@c.us`;
             }
 
-            const response = await bot.client.sendMessage(chatId, message);
-            res.json({ success: true, message: 'تم الإرسال!', responseId: response.id.id });
+            const response = await bot.sendMessage(chatId, message);
+            const responseId = response?.id?.id || response?.id?._serialized || 'sent';
+            res.json({ success: true, message: 'تم الإرسال!', responseId });
         } catch (e) {
             res.status(500).json({ success: false, message: e.toString() });
         }
