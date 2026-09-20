@@ -8,7 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/style.css?v=8">
+    <link rel="icon" type="image/png" href="assets/logo.png">
+    <link rel="stylesheet" href="assets/style.css?v=11">
     <style>
         /* أنماط مستعرض أوامر العمل المتقدم */
         .wo-explorer-header {
@@ -446,11 +447,7 @@
     <header class="header" id="header">
         <div class="header-content">
             <div class="logo">
-                <div class="logo-icon" style="background: linear-gradient(135deg, var(--blue), var(--purple));">
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                </div>
+                <img src="assets/logo.png" alt="WhatsToot Logo" class="logo-img">
                 <div>
                     <h1>مستعرض أوامر العمل</h1>
                     <p class="subtitle">Synology FileStation &amp; Cloud Storage</p>
@@ -514,8 +511,28 @@
                 <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                     <button class="btn btn-sm" onclick="toggleSelectAll()" id="btnSelectAll" style="background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font-weight: bold;">☑️ تحديد الكل</button>
                     <button class="btn btn-sm" onclick="downloadAllZip()" style="background: rgba(37, 211, 102, 0.15); color: #25D366; border: 1px solid rgba(37, 211, 102, 0.3); border-radius: 6px; padding: 6px 16px; font-weight: bold;" id="btnDownloadAllZip">📥 تحميل الكل (ZIP)</button>
-                    <button class="btn btn-sm" onclick="openMoveModal(true)" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 6px; padding: 6px 14px; font-weight: bold;">📦 نقل كل الصور</button>
+                    <button class="btn btn-sm" onclick="openMoveModal(true)" style="background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 6px; padding: 6px 14px; font-weight: bold;">📦 نقل كل الملفات</button>
                 </div>
+            </div>
+
+            <!-- تبويبات تصفية الميديا (الكل / صور / فيديو / PDF) -->
+            <div class="media-filter-tabs" id="mediaFilterTabs">
+                <button class="media-filter-btn active" onclick="filterMedia('all')" id="tabFilterAll">
+                    <span>🌟 الكل</span>
+                    <span class="media-filter-count" id="countFilterAll">0</span>
+                </button>
+                <button class="media-filter-btn" onclick="filterMedia('image')" id="tabFilterImage">
+                    <span>🖼 الصور</span>
+                    <span class="media-filter-count" id="countFilterImage">0</span>
+                </button>
+                <button class="media-filter-btn" onclick="filterMedia('video')" id="tabFilterVideo">
+                    <span>🎬 الفيديو</span>
+                    <span class="media-filter-count" id="countFilterVideo">0</span>
+                </button>
+                <button class="media-filter-btn" onclick="filterMedia('pdf')" id="tabFilterPdf">
+                    <span>📄 مستندات PDF</span>
+                    <span class="media-filter-count" id="countFilterPdf">0</span>
+                </button>
             </div>
 
             <!-- Gallery Loading -->
@@ -568,26 +585,36 @@
         </div>
     </div>
 
-    <!-- Fast Lightbox -->
+    <!-- Fast Lightbox & Multimedia Viewer -->
     <div class="fast-lightbox" id="fastLightbox">
         <div class="lightbox-topbar">
-            <div>
-                <span id="lbFileName" style="font-weight: 700; font-size: 1rem;"></span>
-                <span id="lbCounter" style="opacity: 0.7; font-size: 0.85rem; margin-right: 10px;"></span>
+            <div style="display: flex; align-items: center; gap: 10px; overflow: hidden;">
+                <span id="lbTypeBadge" class="media-type-badge badge-image" style="position: static;">صورة</span>
+                <span id="lbFileName" style="font-weight: 700; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;"></span>
+                <span id="lbCounter" style="opacity: 0.7; font-size: 0.85rem;"></span>
             </div>
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="btn btn-sm" onclick="rotateLightbox()" title="تدوير" style="background: rgba(255,255,255,0.1); color: #fff; border: none; border-radius: 6px; padding: 6px 10px;">🔄 تدوير</button>
-                <button class="btn btn-sm" onclick="downloadCurrentLightboxImage()" title="تحميل" style="background: rgba(37, 211, 102, 0.2); color: #25D366; border: 1px solid rgba(37, 211, 102, 0.4); border-radius: 6px; padding: 6px 14px; font-weight: bold;">⬇️ تحميل</button>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <button class="btn btn-sm" id="btnRotateLb" onclick="rotateLightbox()" title="تدوير" style="background: rgba(255,255,255,0.1); color: #fff; border: none; border-radius: 6px; padding: 6px 10px;">🔄 تدوير</button>
+                <a id="btnOpenNewTab" href="#" target="_blank" class="btn btn-sm" title="فتح في نافذة مستقلة" style="background: rgba(59, 130, 246, 0.2); color: var(--blue); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 6px; padding: 6px 12px; font-weight: bold; text-decoration: none; display: none;">↗ فتح بنافذة جديدة</a>
+                <button class="btn btn-sm" onclick="downloadCurrentLightboxMedia()" title="تحميل" style="background: rgba(37, 211, 102, 0.2); color: #25D366; border: 1px solid rgba(37, 211, 102, 0.4); border-radius: 6px; padding: 6px 14px; font-weight: bold;">⬇️ تحميل</button>
                 <button class="btn btn-sm" onclick="closeLightbox()" title="إغلاق" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; padding: 6px 12px; font-weight: bold;">✕</button>
             </div>
         </div>
         <div class="lightbox-stage" onclick="handleLightboxClick(event)">
-            <button class="lightbox-nav-btn lightbox-prev" onclick="prevImage(event)" title="السابق (سهم يمين)">&#10095;</button>
-            <img id="lbImage" src="" alt="" style="transform: rotate(0deg);">
-            <button class="lightbox-nav-btn lightbox-next" onclick="nextImage(event)" title="التالي (سهم يسار)">&#10094;</button>
+            <button class="lightbox-nav-btn lightbox-prev" onclick="prevMedia(event)" title="السابق (سهم يمين)">&#10095;</button>
+            
+            <div class="lightbox-media-container" id="lbMediaContainer">
+                <img id="lbImage" src="" alt="" style="display: none; transform: rotate(0deg); max-width: 95%; max-height: 85vh; object-fit: contain; border-radius: var(--radius); box-shadow: 0 10px 40px rgba(0,0,0,0.6);">
+                <video id="lbVideo" class="lightbox-video-player" controls playsinline style="display: none;"></video>
+                <div id="lbPdfWrapper" class="lightbox-pdf-wrapper" style="display: none;">
+                    <iframe id="lbPdfFrame" class="lightbox-pdf-frame" src=""></iframe>
+                </div>
+            </div>
+
+            <button class="lightbox-nav-btn lightbox-next" onclick="nextMedia(event)" title="التالي (سهم يسار)">&#10094;</button>
         </div>
     </div>
 
-    <script src="assets/work-orders.js?v=2"></script>
+    <script src="assets/work-orders.js?v=3"></script>
 </body>
 </html>

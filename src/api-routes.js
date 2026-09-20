@@ -809,7 +809,7 @@ function register(app, bot, uploader, logger, emailReader) {
     });
 
     // =============================================
-    // 🖼 استعراض الصورة بالحجم الكامل
+    // 🖼 استعراض الملف بالحجم الكامل (صور + فيديو + PDF)
     // GET /api/image-full/:id
     // =============================================
     app.get('/api/image-full/:id', async (req, res) => {
@@ -819,7 +819,7 @@ function register(app, bot, uploader, logger, emailReader) {
 
             const upload = db.getUploadById(uploadId);
             if (!upload || !upload.drive_id) {
-                return res.status(404).send('Image not found');
+                return res.status(404).send('File not found');
             }
 
             if (!uploader.downloadFile) {
@@ -828,21 +828,42 @@ function register(app, bot, uploader, logger, emailReader) {
 
             const { buffer, contentType } = await uploader.downloadFile(upload.drive_id);
 
+            // دعم Range requests لملفات الفيديو للتشغيل والتقديم السلس
+            const range = req.headers.range;
+            if (range && contentType && contentType.startsWith('video/')) {
+                const total = buffer.length;
+                const parts = range.replace(/bytes=/, '').split('-');
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
+                const chunksize = (end - start) + 1;
+
+                res.writeHead(206, {
+                    'Content-Range': `bytes ${start}-${end}/${total}`,
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': chunksize,
+                    'Content-Type': contentType,
+                });
+                return res.end(buffer.slice(start, end + 1));
+            }
+
             res.set({
-                'Content-Type': contentType,
+                'Content-Type': contentType || 'application/octet-stream',
+                'Content-Length': buffer.length,
+                'Accept-Ranges': 'bytes',
                 'Cache-Control': 'public, max-age=2592000, immutable',
+                'Content-Disposition': `inline; filename="${encodeURIComponent(upload.file_name)}"`,
                 'X-Work-Order': upload.work_order,
                 'X-File-Name': upload.file_name,
             });
             res.send(buffer);
         } catch (e) {
-            logger.warning(`Image proxy error: ${e.message}`);
-            res.status(500).send('Could not load image');
+            logger.warning(`File proxy error: ${e.message}`);
+            res.status(500).send('Could not load file');
         }
     });
 
     // =============================================
-    // 🖼 استعراض بالحجم الكامل عبر مسار سينولجي
+    // 🖼 استعراض بالحجم الكامل عبر مسار سينولجي (صور + فيديو + PDF)
     // GET /api/synology/full?path=...
     // =============================================
     app.get('/api/synology/full', async (req, res) => {
@@ -855,13 +876,35 @@ function register(app, bot, uploader, logger, emailReader) {
             }
 
             const { buffer, contentType } = await uploader.downloadFile(filePath);
+
+            // دعم Range requests لملفات الفيديو
+            const range = req.headers.range;
+            if (range && contentType && contentType.startsWith('video/')) {
+                const total = buffer.length;
+                const parts = range.replace(/bytes=/, '').split('-');
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
+                const chunksize = (end - start) + 1;
+
+                res.writeHead(206, {
+                    'Content-Range': `bytes ${start}-${end}/${total}`,
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': chunksize,
+                    'Content-Type': contentType,
+                });
+                return res.end(buffer.slice(start, end + 1));
+            }
+
             res.set({
-                'Content-Type': contentType,
+                'Content-Type': contentType || 'application/octet-stream',
+                'Content-Length': buffer.length,
+                'Accept-Ranges': 'bytes',
                 'Cache-Control': 'public, max-age=2592000, immutable',
+                'Content-Disposition': `inline; filename="${encodeURIComponent(path.basename(filePath))}"`,
             });
             res.send(buffer);
         } catch (e) {
-            res.status(500).send('Could not load image');
+            res.status(500).send('Could not load file');
         }
     });
 
