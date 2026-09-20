@@ -49,8 +49,13 @@ class WhatsAppBot extends EventEmitter {
         // المجموعات المراقبة
         this.monitoredGroups = config.MONITORED_GROUPS;
 
+        // إزالة أقفال Chromium القديمة لتجنب تعليق المتصفح على السيرفر
+        this._removeChromiumLocks();
+
         // عميل واتساب
         this.client = new Client({
+            authTimeoutMs: 120000,
+            takeoverOnConflict: true,
             authStrategy: new LocalAuth({
                 dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
             }),
@@ -148,17 +153,54 @@ class WhatsAppBot extends EventEmitter {
     }
 
     /**
+     * إزالة ملفات قفل Chromium القديمة لتفادي تعليق Puppeteer بعد إعادة التشغيل
+     */
+    _removeChromiumLocks() {
+        try {
+            const sessionDir = path.join(config.BASE_PATH, '.wwebjs_auth', 'session');
+            if (fs.existsSync(sessionDir)) {
+                const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+                for (const lock of lockFiles) {
+                    const lockPath = path.join(sessionDir, lock);
+                    try {
+                        if (fs.existsSync(lockPath) || fs.lstatSync(lockPath).isSymbolicLink()) {
+                            fs.unlinkSync(lockPath);
+                            console.log(`🔓 تم إزالة قفل الكروم القديم: ${lock}`);
+                        }
+                    } catch (e) {}
+                }
+            }
+        } catch (err) {
+            // صامت
+        }
+    }
+
+    /**
      * تشغيل البوت
      */
     initialize() {
-        this.client.initialize();
+        this._removeChromiumLocks();
+        this.client.initialize().catch(err => {
+            console.error('❌ خطأ أثناء تهيئة عميل واتساب:', err.message);
+            if (err.message && (err.message.includes('exceeded') || err.message.includes('timeout') || err.message.includes('Waiting failed'))) {
+                console.log('🔄 جاري إعادة محاولة تهيئة عميل واتساب بعد 5 ثوانٍ...');
+                setTimeout(() => {
+                    this._removeChromiumLocks();
+                    this.client.initialize().catch(e => console.error('❌ فشل إعادة محاولة التهيئة:', e.message));
+                }, 5000);
+            }
+        });
     }
 
     /**
      * إعادة إنشاء عميل واتساب من جديد (بعد قطع الاتصال)
      */
     recreateClient() {
+        this._removeChromiumLocks();
+
         this.client = new Client({
+            authTimeoutMs: 120000,
+            takeoverOnConflict: true,
             authStrategy: new LocalAuth({
                 dataPath: path.join(config.BASE_PATH, '.wwebjs_auth'),
             }),

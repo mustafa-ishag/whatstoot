@@ -249,23 +249,24 @@ server.on('error', (err) => {
 }, 1000); // نهاية setTimeout للانتظار بعد قتل العملية
 
 // =============================================
-// معالجة إيقاف التطبيق
+// معالجة إيقاف التطبيق بشكل آمن
 // =============================================
-process.on('SIGINT', async () => {
-    console.log('\n⏹️ إيقاف البوت...');
-    worker.stop();
-    emailReader.stop();
+async function gracefulShutdown() {
+    console.log('\n⏹️ إيقاف البوت وإغلاق المتصفح...');
+    try { worker.stop(); } catch(e) {}
+    try { emailReader.stop(); } catch(e) {}
+    if (bot && bot.client) {
+        try {
+            await bot.client.destroy();
+            console.log('🛑 تم إغلاق عميل واتساب بنجاح');
+        } catch (e) {}
+    }
     logger.info('Bot shutting down');
     process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-    console.log('\n⏹️ إيقاف البوت...');
-    worker.stop();
-    emailReader.stop();
-    logger.info('Bot shutting down');
-    process.exit(0);
-});
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
 
 process.on('uncaughtException', (err) => {
     console.error('❌ Uncaught Exception:', err.message);
