@@ -9,11 +9,13 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const path = require('path');
 const fs = require('fs');
+const EventEmitter = require('events');
 const config = require('./config');
 const { downloadMediaDirect } = require('./media-downloader');
 
-class WhatsAppBot {
+class WhatsAppBot extends EventEmitter {
     constructor(imageProcessor, logger) {
+        super();
         this.imageProcessor = imageProcessor;
         this.logger = logger;
 
@@ -86,6 +88,7 @@ class WhatsAppBot {
 
         this.client.on('qr', (qr) => {
             this.qrCodeData = qr;
+            this.emit('qr', { qr });
             console.log('\n==================================================');
             console.log('📌 امسح هذا الباركود (QR Code) بجوالك:');
             console.log('==================================================\n');
@@ -95,6 +98,7 @@ class WhatsAppBot {
         this.client.on('ready', () => {
             this.isClientReady = true;
             this.qrCodeData = null;
+            this.emit('status', { ready: true, has_qr: false });
             console.log('\n✅ واتساب جاهز! البوت يراقب المجموعات الآن...');
             console.log(`🌐 API: http://localhost:${config.PORT}\n`);
             
@@ -119,6 +123,7 @@ class WhatsAppBot {
 
         this.client.on('disconnected', (reason) => {
             this.isClientReady = false;
+            this.emit('status', { ready: false, reason });
             console.log('⚠️ تم قطع الاتصال:', reason);
             
             if (this.manualDisconnect) {
@@ -224,6 +229,12 @@ class WhatsAppBot {
                 console.log(`⚠️ تعذر جلب تفاصيل المجموعة (${groupId}) بسبب خطأ الواتساب. سنستمر باستخدام الاسم: ${groupName}`);
             }
 
+            // حفظ وتحديث المجموعة في قاعدة البيانات تلقائياً
+            try {
+                const db = require('./database');
+                db.saveGroup(groupId, groupName);
+            } catch (e) {}
+
             // فحص إذا كانت المجموعة مراقبة
             if (this.monitoredGroups !== 'all') {
                 const groups = Array.isArray(this.monitoredGroups)
@@ -287,9 +298,22 @@ class WhatsAppBot {
                     }
                 }
 
+                // حفظ الميديا مباشرة في القرص لتفريغ الذاكرة فوراً ومنع OOM
+                const crypto = require('crypto');
+                const ext = this.imageProcessor.uploader.getExtensionFromMime(media.mimetype || 'image/jpeg');
+                const prefix = isPdf ? 'pdf' : (isVideo ? 'vid' : 'img');
+                const tempExt = isPdf ? 'pdf' : ext;
+                const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${tempExt}`;
+                const tempPath = path.join(config.TEMP_PATH, tempName);
+                
+                const mediaBuffer = Buffer.from(media.data, 'base64');
+                fs.writeFileSync(tempPath, mediaBuffer);
+                const fileHash = this.imageProcessor.checker.hashData(mediaBuffer);
+
                 const payload = {
                     type: isPdf ? 'pdf' : (isVideo ? 'video' : 'image'),
-                    image_base64: media.data,
+                    temp_path: tempPath,
+                    file_hash: fileHash,
                     mimetype: media.mimetype,
                     original_filename: media.filename || null,
                     caption,
@@ -516,11 +540,26 @@ class WhatsAppBot {
                 this.uploadBatches.delete(batchKey);
             }, this.BATCH_DELAY_MS);
 
-        } else if (result.action === 'queued') {
+            } else if (result.action === 'queued') {
             console.log('⏳ الصورة في الطابور...');
         } else if (result.action === 'skipped') {
             console.log('⚠️ صورة مكررة — تم التخطي');
         }
+
+        // إطلاق حدث لحظي لتغذية لوحة التحكم الحية
+        try {
+            this.emit('upload', {
+                action: result.action,
+                work_order: result.work_order || payload.work_order,
+                file_name: result.file_name,
+                group_id: payload.group_id,
+                group_name: payload.group_name,
+                sender: payload.sender,
+                sender_name: payload.sender_name,
+                status: result.action === 'uploaded' ? 'completed' : (result.action === 'skipped' ? 'duplicate' : 'waiting'),
+                timestamp: new Date().toISOString(),
+            });
+        } catch (e) {}
     }
 
     /**
@@ -628,6 +667,11 @@ class WhatsAppBot {
                 const groupId = group.id;
                 const groupName = group.name;
                 
+                // حفظ المجموعة في قاعدة البيانات فوراً
+                try {
+                    db.saveGroup(groupId, groupName, group.unreadCount || 0);
+                } catch (e) {}
+
                 // نقوم بمزامنة المجموعة إذا كانت تحتوي رسائل غير مقروءة، أو نقوم بمزامنة آخر 100 رسالة بشكل عام للتحقق
                 const limit = Math.max(syncLimit, group.unreadCount || 0);
 

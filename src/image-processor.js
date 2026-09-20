@@ -59,30 +59,37 @@ class ImageProcessor {
      * @returns {Promise<{ success: boolean, action: string, work_order?: string, file_name?: string, message: string }>}
      */
     async processImage(input) {
-        const { image_base64, mimetype, caption, work_order: inputWO, group_id, group_name, sender, original_filename, message_id } = input;
+        const { image_base64, temp_path, file_hash, mimetype, caption, work_order: inputWO, group_id, group_name, sender, original_filename, message_id } = input;
 
-        if (!image_base64) {
+        if (!image_base64 && !temp_path) {
             return { success: false, message: 'No media data' };
         }
 
         try {
-            // 1. فك base64 وحفظ مؤقت
-            const mediaData = Buffer.from(image_base64, 'base64');
             const ext = this.uploader.getExtensionFromMime(mimetype || 'image/jpeg');
             const isVideo = (mimetype || '').startsWith('video/');
             const isPdf = mimetype === 'application/pdf';
             const prefix = isPdf ? 'pdf' : (isVideo ? 'vid' : 'img');
             const tempExt = isPdf ? 'pdf' : ext;
-            const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${tempExt}`;
-            const tempPath = path.join(config.TEMP_PATH, tempName);
-            fs.writeFileSync(tempPath, mediaData);
 
+            let tempPath = temp_path;
+            let hash = file_hash;
+
+            // 1. إذا لم يُحفظ مسبقاً، نحفظ في القرص المؤقت ونحسب البصمة
+            if (!tempPath && image_base64) {
+                const mediaData = Buffer.from(image_base64, 'base64');
+                const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${tempExt}`;
+                tempPath = path.join(config.TEMP_PATH, tempName);
+                fs.writeFileSync(tempPath, mediaData);
+                hash = this.checker.hashData(mediaData);
+            } else if (tempPath && !hash) {
+                hash = this.checker.hashFile(tempPath);
+            }
+
+            const tempName = path.basename(tempPath);
             const mediaType = isPdf ? 'pdf' : (isVideo ? 'video' : 'image');
             const mediaLabel = isPdf ? 'الملف' : (isVideo ? 'الفيديو' : 'الصورة');
-            this.logger.info(`Saved temp ${mediaType}: ${tempName} (${mediaData.length} bytes)`);
-
-            // 2. حساب hash وفحص التكرار
-            const hash = this.checker.hashData(mediaData);
+            this.logger.info(`Processing ${mediaType}: ${tempName}`);
 
             // 3. تحديد رقم أمر العمل
             let workOrder = inputWO || '';

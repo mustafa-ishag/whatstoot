@@ -45,6 +45,19 @@ function getInstance(dbPath) {
         _instance.exec("ALTER TABLE queue ADD COLUMN message_id TEXT");
     } catch (e) {}
 
+    // جدول المجموعات المحفوظة
+    try {
+        _instance.exec(`
+            CREATE TABLE IF NOT EXISTS groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                participant_count INTEGER DEFAULT 0,
+                last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_groups_last_active ON groups(last_active DESC);
+        `);
+    } catch (e) {}
+
     return _instance;
 }
 
@@ -350,11 +363,89 @@ function isMessageProcessed(messageId) {
     return rowQueue.c > 0;
 }
 
+// =============================================
+// 👥 Groups Management
+// =============================================
+
+function saveGroup(id, name, participantCount = 0) {
+    if (!id || !name) return;
+    const db = getInstance();
+    db.prepare(`
+        INSERT INTO groups (id, name, participant_count, last_active)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            participant_count = CASE WHEN excluded.participant_count > 0 THEN excluded.participant_count ELSE groups.participant_count END,
+            last_active = CURRENT_TIMESTAMP
+    `).run(id, name, participantCount);
+}
+
+function getAllCachedGroups() {
+    const db = getInstance();
+    // 1. مزامنة المجموعات من جدول الرفعات التاريخي إذا كانت غير موجودة في جدول groups
+    syncGroupsFromUploads();
+
+    // 2. إرجاع كل المجموعات مرتبة حسب النشاط الأخير
+    return db.prepare(`
+        SELECT id, name, participant_count, last_active 
+        FROM groups 
+        ORDER BY last_active DESC, name ASC
+    `).all();
+}
+
+function syncGroupsFromUploads() {
+    const db = getInstance();
+    try {
+        const rows = db.prepare(`
+            SELECT DISTINCT group_id, group_name 
+            FROM uploads 
+            WHERE group_id IS NOT NULL 
+              AND group_name IS NOT NULL 
+              AND group_id LIKE '%@g.us'
+        `).all();
+
+        const insertStmt = db.prepare(`
+            INSERT OR IGNORE INTO groups (id, name, participant_count, last_active)
+            VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+        `);
+
+        for (const row of rows) {
+            if (row.group_id && row.group_name) {
+                insertStmt.run(row.group_id, row.group_name);
+            }
+        }
+    } catch (e) {
+        // تجاهل الأخطاء العابرة
+    }
+}
+
+// =============================================
+// 📄 Export
+// =============================================
+
+function getUploadsForExport(woFilter = null, status = null) {
+    const db = getInstance();
+    let sql = 'SELECT id, work_order, file_name, group_name, sender, caption, status, uploaded_at FROM uploads WHERE 1=1';
+    const params = [];
+
+    if (woFilter) {
+        sql += ' AND work_order LIKE ?';
+        params.push(`%${woFilter}%`);
+    }
+    if (status) {
+        sql += ' AND status = ?';
+        params.push(status);
+    }
+
+    sql += ' ORDER BY uploaded_at DESC LIMIT 5000';
+    return db.prepare(sql).all(...params);
+}
+
 module.exports = {
     getInstance,
     applySchema,
     // Uploads
-    logUpload, getUploads, getUploadById,
+    logUpload, getUploads, getUploadById, getUploadsForExport,
     // Folders
     getFolder, saveFolder,
     // Context
@@ -370,4 +461,6 @@ module.exports = {
     isMessageProcessed,
     // Reset & Move
     resetWorkOrder, getUploadsForMove, updateUploadWorkOrder,
+    // Groups
+    saveGroup, getAllCachedGroups, syncGroupsFromUploads,
 };

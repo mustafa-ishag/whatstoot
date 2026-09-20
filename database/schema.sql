@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS activity_log (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- جدول المجموعات المحفوظة
+CREATE TABLE IF NOT EXISTS groups (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    participant_count INTEGER DEFAULT 0,
+    last_active       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =============================================
 -- فهارس للأداء
 -- =============================================
@@ -81,6 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_context_expires ON message_context(expires_at);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status, timeout_at);
 CREATE INDEX IF NOT EXISTS idx_queue_group ON queue(group_id, status);
 CREATE INDEX IF NOT EXISTS idx_log_level ON activity_log(level, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_groups_last_active ON groups(last_active DESC);
 
 -- =============================================
 -- إعدادات افتراضية

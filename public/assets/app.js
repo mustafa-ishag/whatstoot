@@ -8,16 +8,22 @@
 // Configuration
 // =============================================
 const API_BASE = '/api';
-const REFRESH_INTERVAL = 10000; // 10 seconds
+const REFRESH_INTERVAL = 15000; // 15 seconds (reduced load thanks to real-time SSE)
 
 let currentFilter = 'all';
 let lastUploadId = 0;
 let refreshTimer = null;
+let currentUploadsList = [];
+let currentLightboxIndex = -1;
+let currentRotation = 0;
+let allLoadedGroups = [];
 
 // =============================================
 // Initialization
 // =============================================
 document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+    setupSSE();
     refreshData();
     startAutoRefresh();
     setupSearch();
@@ -231,6 +237,7 @@ function renderUploads(uploads) {
     const tbody = document.getElementById('uploadsBody');
     const countEl = document.getElementById('tableCount');
 
+    currentUploadsList = uploads;
     countEl.textContent = `${uploads.length} نتيجة`;
 
     if (uploads.length === 0) {
@@ -249,7 +256,7 @@ function renderUploads(uploads) {
         return;
     }
 
-    tbody.innerHTML = uploads.map(u => {
+    tbody.innerHTML = uploads.map((u, index) => {
         const statusMap = {
             'completed': { label: 'مكتمل', class: 'badge-completed' },
             'pending':   { label: 'معلّق', class: 'badge-pending' },
@@ -269,9 +276,9 @@ function renderUploads(uploads) {
         let thumbHtml;
         if (isImage) {
             if (isVideoFile) {
-                thumbHtml = `<div class="thumb-cell thumb-video" onclick="openLightbox(${u.id}, '${escapeHtml(u.work_order)}', '${escapeHtml(u.file_name)}', true)"><div class="thumb-play">▶</div></div>`;
+                thumbHtml = `<div class="thumb-cell thumb-video" onclick="openLightboxIndex(${index})"><div class="thumb-play">▶</div></div>`;
             } else {
-                thumbHtml = `<div class="thumb-cell" onclick="openLightbox(${u.id}, '${escapeHtml(u.work_order)}', '${escapeHtml(u.file_name)}', false)"><img src="/api/image-thumb/${u.id}?size=small" alt="معاينة" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\'thumb-placeholder\'>🖼</span>'"></div>`;
+                thumbHtml = `<div class="thumb-cell" onclick="openLightboxIndex(${index})"><img src="/api/image-thumb/${u.id}?size=small" alt="معاينة" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\'thumb-placeholder\'>🖼</span>'"></div>`;
             }
         } else {
             thumbHtml = '<span class="thumb-placeholder">—</span>';
@@ -401,25 +408,94 @@ function escapeHtml(text) {
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    toast.className = `toast ${type}`;
     toast.textContent = message;
 
     container.appendChild(toast);
 
     setTimeout(() => {
-        toast.style.animation = 'slideOutRight 0.3s forwards';
+        toast.classList.add('toast-exit');
         setTimeout(() => toast.remove(), 300);
     }, 4000);
 }
 
 // =============================================
-// Settings Modal Logic
+// 🌓 Dark / Light Theme
+// =============================================
+
+function initTheme() {
+    const savedTheme = localStorage.getItem('whatstoot_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('whatstoot_theme', newTheme);
+    updateThemeIcon(newTheme);
+}
+
+function updateThemeIcon(theme) {
+    const btn = document.getElementById('themeToggleBtn');
+    if (btn) {
+        btn.innerHTML = theme === 'dark' ? '☀️' : '🌙';
+        btn.title = theme === 'dark' ? 'التبديل إلى الوضع النهاري' : 'التبديل إلى الوضع الليلي';
+    }
+}
+
+// =============================================
+// ⚡ Real-Time SSE (Server-Sent Events)
+// =============================================
+
+function setupSSE() {
+    try {
+        const eventSource = new EventSource(`${API_BASE}/events`);
+
+        eventSource.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload.type === 'upload') {
+                    loadStats();
+                    loadUploads();
+                    const actionWord = payload.data.action === 'uploaded' ? 'تم رفع' : 'في الانتظار';
+                    showToast(`📸 ${actionWord}: ${payload.data.file_name} لأمر ${payload.data.work_order || 'غير مصنف'}`, 'success');
+                } else if (payload.type === 'bot_status' || payload.type === 'qr') {
+                    loadBotStatus();
+                }
+            } catch (e) {
+                // Ignore json parse error
+            }
+        };
+
+        eventSource.onerror = () => {
+            // Reconnection handled automatically by browser
+        };
+    } catch (e) {
+        console.log('SSE not supported or failed to initialize');
+    }
+}
+
+// =============================================
+// 📊 Export to CSV
+// =============================================
+
+function exportToCSV() {
+    const searchVal = document.getElementById('searchInput')?.value || '';
+    let url = `${API_BASE}/export-csv?`;
+    if (searchVal) url += `wo=${encodeURIComponent(searchVal)}&`;
+    if (currentFilter !== 'all') url += `status=${currentFilter}`;
+    window.location.href = url;
+}
+
+// =============================================
+// Settings Modal Logic (مع حل مشكلة اختفاء المجموعات)
 // =============================================
 
 async function openSettingsModal() {
     document.getElementById('settingsModal').classList.add('active');
     
-    // Fetch current settings
     try {
         const res = await fetch(`${API_BASE}/settings`);
         const data = await res.json();
@@ -429,41 +505,87 @@ async function openSettingsModal() {
             currentTarget = data.settings.email_whatsapp_target;
         }
 
-        // Fetch groups
+        const groupSelect = document.getElementById('emailTargetGroup');
+        groupSelect.innerHTML = '<option value="">جاري تحميل المجموعات...</option>';
+        
         const groupsRes = await fetch(`${API_BASE}/groups`);
         const groupsData = await groupsRes.json();
         
-        const groupSelect = document.getElementById('emailTargetGroup');
-        groupSelect.innerHTML = '<option value="">-- اختر مجموعة --</option>';
-        
-        if (groupsData.success && groupsData.groups) {
-            groupsData.groups.forEach(g => {
-                const option = document.createElement('option');
-                option.value = g.id;
-                option.textContent = g.name;
-                groupSelect.appendChild(option);
-            });
+        if (groupsData.success && groupsData.groups && groupsData.groups.length > 0) {
+            allLoadedGroups = groupsData.groups;
+            renderGroupOptions(allLoadedGroups, currentTarget);
+            
+            const notice = document.getElementById('groupsStatusNotice');
+            if (notice) {
+                notice.textContent = groupsData.is_live 
+                    ? `✅ تم العثور على ${groupsData.groups.length} مجموعة (مباشرة من واتساب)`
+                    : `💾 تم تحميل ${groupsData.groups.length} مجموعة مسجلة في النظام`;
+            }
         } else {
-            groupSelect.innerHTML = '<option value="">لم يتم العثور على مجموعات أو البوت غير متصل</option>';
+            allLoadedGroups = [];
+            groupSelect.innerHTML = '<option value="">لم يتم العثور على أي مجموعات</option>';
         }
 
-        // Set initial values
-        if (currentTarget.includes('@g.us')) {
-            // It's a group
+        // تحديد الحالة الأولية
+        if (currentTarget && currentTarget.includes('@g.us')) {
             document.querySelector('input[name="emailTargetType"][value="group"]').checked = true;
             toggleEmailTargetType();
             groupSelect.value = currentTarget;
         } else {
-            // It's a number
             document.querySelector('input[name="emailTargetType"][value="number"]').checked = true;
             toggleEmailTargetType();
-            document.getElementById('emailTargetNumber').value = currentTarget;
+            document.getElementById('emailTargetNumber').value = currentTarget || '';
         }
         
     } catch (e) {
         showToast('خطأ في تحميل الإعدادات', 'error');
         console.error(e);
     }
+}
+
+function renderGroupOptions(groups, selectedId = '') {
+    const groupSelect = document.getElementById('emailTargetGroup');
+    if (!groupSelect) return;
+
+    if (groups.length === 0) {
+        groupSelect.innerHTML = '<option value="">لا توجد مجموعات مطابقة للبحث</option>';
+        return;
+    }
+
+    let html = '<option value="">-- اختر مجموعة --</option>';
+    let foundSelected = false;
+
+    groups.forEach(g => {
+        const isSelected = (g.id === selectedId);
+        if (isSelected) foundSelected = true;
+        const countText = g.participant_count > 0 ? ` (${g.participant_count} عضو)` : '';
+        html += `<option value="${escapeHtml(g.id)}" ${isSelected ? 'selected' : ''}>${escapeHtml(g.name)}${countText}</option>`;
+    });
+
+    if (selectedId && !foundSelected && selectedId.includes('@g.us')) {
+        html += `<option value="${escapeHtml(selectedId)}" selected>المجموعة المحددة حالياً (${escapeHtml(selectedId.split('@')[0])})</option>`;
+    }
+
+    groupSelect.innerHTML = html;
+}
+
+function filterGroupOptions() {
+    const searchInput = document.getElementById('groupSearchInput');
+    const query = (searchInput?.value || '').toLowerCase().trim();
+    const groupSelect = document.getElementById('emailTargetGroup');
+    const currentVal = groupSelect?.value || '';
+
+    if (!query) {
+        renderGroupOptions(allLoadedGroups, currentVal);
+        return;
+    }
+
+    const filtered = allLoadedGroups.filter(g => 
+        (g.name && g.name.toLowerCase().includes(query)) || 
+        (g.id && g.id.toLowerCase().includes(query))
+    );
+
+    renderGroupOptions(filtered, currentVal);
 }
 
 function closeSettingsModal() {
@@ -520,26 +642,39 @@ async function saveSettings() {
 }
 
 // =============================================
-// Lightbox
+// Lightbox (مع التنقل والتدوير والتحميل)
 // =============================================
+
+function openLightboxIndex(index) {
+    if (index < 0 || index >= currentUploadsList.length) return;
+    currentLightboxIndex = index;
+    const item = currentUploadsList[index];
+    const isVideo = /\.(mp4|3gp|mov|avi|mkv|webm)$/i.test(item.file_name);
+    openLightbox(item.id, item.work_order, item.file_name, isVideo);
+}
 
 function openLightbox(uploadId, workOrder, fileName, isVideo = false) {
     const overlay = document.getElementById('lightboxOverlay');
     const img = document.getElementById('lightboxImage');
     const spinner = document.getElementById('lightboxSpinner');
     const info = document.getElementById('lightboxInfo');
+    const downloadBtn = document.getElementById('lightboxDownloadBtn');
     const content = document.querySelector('.lightbox-content');
 
-    // Remove any existing video
     const existingVideo = document.getElementById('lightboxVideo');
     if (existingVideo) existingVideo.remove();
 
-    // Reset state
-    spinner.style.display = 'flex';
+    currentRotation = 0;
+    img.style.transform = 'none';
 
-    // Show overlay
+    spinner.style.display = 'flex';
     overlay.classList.add('active');
     document.body.style.overflow = 'hidden';
+
+    if (downloadBtn) {
+        downloadBtn.href = `/api/image-full/${uploadId}`;
+        downloadBtn.download = fileName || 'download';
+    }
 
     if (isVideo) {
         img.style.display = 'none';
@@ -548,7 +683,7 @@ function openLightbox(uploadId, workOrder, fileName, isVideo = false) {
         video.controls = true;
         video.autoplay = true;
         video.style.maxWidth = '90vw';
-        video.style.maxHeight = '80vh';
+        video.style.maxHeight = '75vh';
         video.style.borderRadius = 'var(--radius)';
         video.style.boxShadow = '0 8px 40px rgba(0,0,0,0.5)';
         video.style.opacity = '0';
@@ -572,6 +707,27 @@ function openLightbox(uploadId, workOrder, fileName, isVideo = false) {
     info.innerHTML = `<span class="lightbox-wo">أمر عمل: ${escapeHtml(workOrder)}</span> <span class="lightbox-file">${icon} ${escapeHtml(fileName)}</span>`;
 }
 
+function prevLightboxImage(e) {
+    if (e) e.stopPropagation();
+    if (currentLightboxIndex > 0) {
+        openLightboxIndex(currentLightboxIndex - 1);
+    }
+}
+
+function nextLightboxImage(e) {
+    if (e) e.stopPropagation();
+    if (currentLightboxIndex < currentUploadsList.length - 1) {
+        openLightboxIndex(currentLightboxIndex + 1);
+    }
+}
+
+function rotateLightboxImage() {
+    const img = document.getElementById('lightboxImage');
+    if (!img || img.style.display === 'none') return;
+    currentRotation = (currentRotation + 90) % 360;
+    img.style.transform = `rotate(${currentRotation}deg)`;
+}
+
 function closeLightbox() {
     const overlay = document.getElementById('lightboxOverlay');
     const img = document.getElementById('lightboxImage');
@@ -580,10 +736,10 @@ function closeLightbox() {
     overlay.classList.remove('active');
     document.body.style.overflow = '';
 
-    // Cleanup after animation
     setTimeout(() => {
         img.src = '';
         img.style.display = 'block';
+        img.style.transform = 'none';
         if (video) {
             video.pause();
             video.remove();
@@ -591,7 +747,12 @@ function closeLightbox() {
     }, 300);
 }
 
-// Close on Escape key
+// Keyboard shortcuts for Lightbox (Esc, Left, Right)
 document.addEventListener('keydown', (e) => {
+    const overlay = document.getElementById('lightboxOverlay');
+    if (!overlay.classList.contains('active')) return;
+
     if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'ArrowRight') prevLightboxImage();
+    if (e.key === 'ArrowLeft') nextLightboxImage();
 });

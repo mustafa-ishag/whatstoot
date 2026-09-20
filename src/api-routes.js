@@ -26,6 +26,67 @@ const QRCode = require('qrcode');
 function register(app, bot, uploader, logger, emailReader) {
 
     // =============================================
+    // 🔒 وسيط التحقق من الصلاحيات (Security Middleware)
+    // =============================================
+    const requireAuth = (req, res, next) => {
+        const apiKey = req.headers['x-api-key'] || req.query.api_key;
+        const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
+        const isSameOrigin = req.headers['sec-fetch-site'] === 'same-origin' || 
+                             (req.headers['referer'] && req.headers['referer'].includes(req.headers['host']));
+
+        // السماح للطلبات الواردة من نفس المتصفح/اللوحة أو عند تطابق مفتاح الـ API
+        if (isLocalhost || isSameOrigin || (apiKey && apiKey === config.API_KEY)) {
+            return next();
+        }
+
+        // في بيئة التطوير، السماح للتجربة
+        if (!config.API_KEY || config.APP_ENV === 'development') {
+            return next();
+        }
+
+        return res.status(401).json({ success: false, message: 'غير مصرح: مفتاح API غير صحيح أو مفقود' });
+    };
+
+    // =============================================
+    // ⚡ التحديثات اللحظية (Server-Sent Events)
+    // GET /api/events
+    // =============================================
+    const sseClients = new Set();
+
+    app.get('/api/events', (req, res) => {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders?.();
+
+        res.write(`data: ${JSON.stringify({ type: 'connected', time: new Date().toISOString() })}\n\n`);
+
+        sseClients.add(res);
+
+        req.on('close', () => {
+            sseClients.delete(res);
+        });
+    });
+
+    const broadcastSSE = (eventType, data) => {
+        const message = `data: ${JSON.stringify({ type: eventType, data, time: new Date().toISOString() })}\n\n`;
+        for (const client of sseClients) {
+            try {
+                client.write(message);
+            } catch (e) {
+                sseClients.delete(client);
+            }
+        }
+    };
+
+    // ربط أحداث البوت بالبث اللحظي
+    if (bot && typeof bot.on === 'function') {
+        bot.on('upload', (data) => broadcastSSE('upload', data));
+        bot.on('status', (data) => broadcastSSE('bot_status', data));
+        bot.on('qr', (data) => broadcastSSE('qr', data));
+    }
+
+    // =============================================
     // 📊 إحصائيات
     // GET /api/stats
     // =============================================
@@ -94,7 +155,7 @@ function register(app, bot, uploader, logger, emailReader) {
         }
     });
 
-    app.post('/api/settings', (req, res) => {
+    app.post('/api/settings', requireAuth, (req, res) => {
         try {
             const { key, value } = req.body || {};
 
@@ -153,14 +214,14 @@ function register(app, bot, uploader, logger, emailReader) {
         }
     };
 
-    app.get('/api/reset-wo', handleResetWO);
-    app.post('/api/reset-wo', handleResetWO);
+    app.get('/api/reset-wo', requireAuth, handleResetWO);
+    app.post('/api/reset-wo', requireAuth, handleResetWO);
 
     // =============================================
     // 📦 نقل صور بين أوامر عمل
     // POST /api/move-images
     // =============================================
-    app.post('/api/move-images', async (req, res) => {
+    app.post('/api/move-images', requireAuth, async (req, res) => {
         const { from_wo, to_wo, count: rawCount } = req.body || {};
         const count = Math.max(1, Math.min(parseInt(rawCount) || 1, 50));
 
@@ -271,7 +332,7 @@ function register(app, bot, uploader, logger, emailReader) {
     // 🔌 قطع اتصال واتساب
     // POST /api/disconnect
     // =============================================
-    app.post('/api/disconnect', async (req, res) => {
+    app.post('/api/disconnect', requireAuth, async (req, res) => {
         try {
             console.log('🔌 طلب قطع اتصال واتساب من لوحة التحكم...');
             bot.isClientReady = false;
@@ -285,8 +346,7 @@ function register(app, bot, uploader, logger, emailReader) {
 
             res.json({ success: true, message: 'جاري إعادة تشغيل النظام... الباركود سيظهر خلال 15 ثانية.' });
 
-            // إغلاق العملية بعد ثانية واحدة — systemd سيعيد التشغيل
-            // وعند التشغيل server.js سيجد العلامة ويمسح الجلسة قبل تهيئة واتساب
+            // إغلاق العملية بعد ثانية واحدة — systemd أو PM2 سيعيد التشغيل
             setTimeout(() => {
                 console.log('🔄 إعادة تشغيل العملية...');
                 process.exit(0);
@@ -299,28 +359,109 @@ function register(app, bot, uploader, logger, emailReader) {
     });
 
     // =============================================
-    // 📋 قائمة المجموعات
+    // 📋 قائمة المجموعات (حل مشكلة عدم ظهور المجموعات)
     // GET /api/groups  أو  GET /groups
     // =============================================
     const groupsHandler = async (req, res) => {
-        if (!bot.isClientReady) {
-            return res.status(503).json({ success: false, message: 'واتساب غير جاهز' });
+        let liveGroups = [];
+
+        // محاولة جلب المجموعات الحية بأمان عبر Puppeteer إذا كان الواتساب متصلاً
+        if (bot.isClientReady && bot.client?.pupPage) {
+            try {
+                liveGroups = await bot.client.pupPage.evaluate(() => {
+                    const ChatCollection = window.require?.('WAWebCollections')?.Chat;
+                    if (!ChatCollection) return [];
+                    return ChatCollection.getModelsArray()
+                        .filter(c => c && c.isGroup && !c.isNewsletter && !c.isChannel)
+                        .map(c => ({
+                            id: c.id?._serialized,
+                            name: c.name || c.formattedTitle || 'Unknown Group',
+                            participant_count: c.participants?.length || 0,
+                        }))
+                        .filter(g => g.id);
+                });
+
+                if (Array.isArray(liveGroups) && liveGroups.length > 0) {
+                    for (const g of liveGroups) {
+                        db.saveGroup(g.id, g.name, g.participant_count);
+                    }
+                }
+            } catch (evalErr) {
+                logger.warning(`Failed to fetch live WhatsApp groups: ${evalErr.message}`);
+            }
         }
-        try {
-            const chats = await bot.client.getChats();
-            const groups = chats.filter(c => c.isGroup).map(g => ({
-                id: g.id._serialized,
-                name: g.name,
-                participant_count: g.participants?.length || 0,
-            }));
-            res.json({ success: true, groups });
-        } catch (e) {
-            res.status(500).json({ success: false, message: e.toString() });
+
+        // جلب جميع المجموعات المحفوظة من قاعدة البيانات (مع المزامنة من uploads)
+        const cachedGroups = db.getAllCachedGroups();
+
+        // دمج المجموعات المباشرة مع المخزنة مؤقتاً لضمان عدم فقدان أي مجموعة
+        const groupMap = new Map();
+        for (const g of cachedGroups) {
+            groupMap.set(g.id, g);
         }
+        for (const g of liveGroups) {
+            groupMap.set(g.id, g);
+        }
+
+        const groups = Array.from(groupMap.values()).map(g => ({
+            id: g.id,
+            name: g.name,
+            participant_count: g.participant_count || 0,
+            last_active: g.last_active || null
+        }));
+
+        res.json({
+            success: true,
+            groups,
+            count: groups.length,
+            is_live: liveGroups.length > 0
+        });
     };
 
     app.get('/api/groups', groupsHandler);
     app.get('/groups', groupsHandler);
+
+    // =============================================
+    // 📊 تصدير البيانات إلى Excel/CSV
+    // GET /api/export-csv?wo=123&status=completed
+    // =============================================
+    app.get('/api/export-csv', (req, res) => {
+        try {
+            const woFilter = req.query.wo || null;
+            const status = req.query.status || null;
+
+            const uploads = db.getUploadsForExport(woFilter, status);
+
+            // إضافة BOM لتوافق الأحرف العربية التام مع Excel
+            let csv = '\uFEFF';
+            csv += 'المعرف,أمر العمل,اسم الملف,المجموعة,المرسل,الكابشن,الحالة,تاريخ الرفع\n';
+
+            const escapeCsv = (val) => {
+                if (val === null || val === undefined) return '""';
+                return `"${String(val).replace(/"/g, '""')}"`;
+            };
+
+            for (const row of uploads) {
+                csv += [
+                    row.id,
+                    escapeCsv(row.work_order),
+                    escapeCsv(row.file_name),
+                    escapeCsv(row.group_name),
+                    escapeCsv(row.sender),
+                    escapeCsv(row.caption),
+                    escapeCsv(row.status),
+                    escapeCsv(row.uploaded_at)
+                ].join(',') + '\n';
+            }
+
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="whatstoot_export_${Date.now()}.csv"`);
+            res.send(csv);
+
+        } catch (e) {
+            res.status(500).json({ success: false, message: e.message });
+        }
+    });
 
     // =============================================
     // 📨 إرسال رسالة
@@ -355,8 +496,8 @@ function register(app, bot, uploader, logger, emailReader) {
         }
     };
 
-    app.post('/api/send-message', sendMessageHandler);
-    app.post('/send-message', sendMessageHandler);
+    app.post('/api/send-message', requireAuth, sendMessageHandler);
+    app.post('/send-message', requireAuth, sendMessageHandler);
 
     // =============================================
     // 📝 سجل الأحداث
