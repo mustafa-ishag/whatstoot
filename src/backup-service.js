@@ -25,13 +25,29 @@ class BackupService {
     }
 
     _ensureBackupDir() {
-        try {
-            if (!fs.existsSync(this.backupDir)) {
-                fs.mkdirSync(this.backupDir, { recursive: true, mode: 0o755 });
+        const candidates = [
+            path.join(config.BASE_PATH, 'storage', 'backups'),
+            path.join(path.dirname(config.DB_PATH), 'backups'),
+            path.join(config.TEMP_PATH, 'backups')
+        ];
+
+        for (const dir of candidates) {
+            try {
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
+                }
+                // اختبار صلاحية الكتابة الفعلية
+                const testFile = path.join(dir, `.write_test_${Date.now()}`);
+                fs.writeFileSync(testFile, 'ok');
+                fs.unlinkSync(testFile);
+
+                this.backupDir = dir;
+                return dir;
+            } catch (e) {
+                // تجربة المسار المرشح التالي
             }
-        } catch (e) {
-            console.error('⚠️ [BackupService] فشل إنشاء مجلد النسخ الاحتياطية:', e.message);
         }
+        return this.backupDir;
     }
 
     /**
