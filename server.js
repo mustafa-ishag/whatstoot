@@ -53,7 +53,12 @@ if (fs.existsSync(clearFlagPath)) {
 // =============================================
 // 2. إنشاء المجلدات المطلوبة
 // =============================================
-const dirs = [config.TEMP_PATH, config.LOGS_PATH, path.dirname(config.DB_PATH)];
+const dirs = [
+    config.TEMP_PATH,
+    config.LOGS_PATH,
+    path.dirname(config.DB_PATH),
+    path.join(config.BASE_PATH, 'storage', 'backups')
+];
 for (const dir of dirs) {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -282,9 +287,13 @@ async function gracefulShutdown() {
     try { emailReader.stop(); } catch(e) {}
     try { tempCleaner.stop(); } catch(e) {}
     try { backupService.stop(); } catch(e) {}
-    if (bot && bot.client) {
+    if (bot) {
         try {
-            await bot.client.destroy();
+            if (typeof bot.destroy === 'function') {
+                await bot.destroy();
+            } else if (bot.client) {
+                await bot.client.destroy();
+            }
             console.log('🛑 تم إغلاق عميل واتساب بنجاح');
         } catch (e) {}
     }

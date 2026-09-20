@@ -78,6 +78,12 @@ class WhatsAppBot extends EventEmitter {
 
         this.isClientReady = false;
         this.qrCodeData = null;
+        this.isReconnecting = false;
+        this.isSyncingMessages = false;
+        this.isDestroyed = false;
+        this._reconnectTimeout = null;
+        this._initRetryTimeout = null;
+        this._unreadSyncTimeout = null;
 
         this._setupEvents();
     }
@@ -121,9 +127,11 @@ class WhatsAppBot extends EventEmitter {
             await this._applyPuppeteerFixes();
 
             // معالجة الرسائل المعلقة التي وصلت أثناء إيقاف البوت
-            setTimeout(() => {
+            if (this._unreadSyncTimeout) clearTimeout(this._unreadSyncTimeout);
+            this._unreadSyncTimeout = setTimeout(() => {
+                this._unreadSyncTimeout = null;
                 this.processUnreadMessages();
-            }, 3000);
+            }, 5000);
         });
 
         let authLogged = false;
@@ -153,10 +161,17 @@ class WhatsAppBot extends EventEmitter {
                 return;
             }
 
-            console.log('🔄 جاري إعادة إنشاء عميل واتساب خلال 5 ثوانٍ...');
-            setTimeout(() => {
+            if (this.isReconnecting) {
+                console.log('⏳ عملية إعادة الاتصال جارية بالفعل، لن يتم جدولة محاولة مكررة.');
+                return;
+            }
+
+            if (this._reconnectTimeout) clearTimeout(this._reconnectTimeout);
+            console.log('🔄 جاري جدولة إعادة إنشاء عميل واتساب خلال 5 ثوانٍ...');
+            this._reconnectTimeout = setTimeout(async () => {
+                this._reconnectTimeout = null;
                 try {
-                    this.recreateClient();
+                    await this.recreateClient();
                     this.initialize();
                 } catch (e) {
                     console.error('❌ فشل إعادة الاتصال:', e.message);
@@ -199,15 +214,23 @@ class WhatsAppBot extends EventEmitter {
      * تشغيل البوت
      */
     initialize() {
+        if (!this.client) return;
         this._removeChromiumLocks();
         this.client.initialize().catch(err => {
             console.error('❌ خطأ أثناء تهيئة عميل واتساب:', err.message);
+            if (this.manualDisconnect || this.isDestroyed) return;
             if (err.message && (err.message.includes('exceeded') || err.message.includes('timeout') || err.message.includes('Waiting failed'))) {
-                console.log('🔄 جاري إعادة محاولة تهيئة عميل واتساب بعد 5 ثوانٍ...');
-                setTimeout(() => {
-                    this._removeChromiumLocks();
-                    this.client.initialize().catch(e => console.error('❌ فشل إعادة محاولة التهيئة:', e.message));
-                }, 5000);
+                if (this._initRetryTimeout) clearTimeout(this._initRetryTimeout);
+                console.log('🔄 جاري إعادة محاولة تهيئة عميل واتساب بعد 10 ثوانٍ...');
+                this._initRetryTimeout = setTimeout(async () => {
+                    this._initRetryTimeout = null;
+                    try {
+                        await this.recreateClient();
+                        this.initialize();
+                    } catch (e) {
+                        console.error('❌ فشل إعادة محاولة التهيئة:', e.message);
+                    }
+                }, 10000);
             }
         });
     }
@@ -215,7 +238,45 @@ class WhatsAppBot extends EventEmitter {
     /**
      * إعادة إنشاء عميل واتساب من جديد (بعد قطع الاتصال)
      */
-    recreateClient() {
+    async recreateClient() {
+        if (this.isReconnecting) {
+            console.log('⏳ عملية إعادة الاتصال جارية بالفعل — تم تجاهل الطلب المكرر.');
+            return;
+        }
+        this.isReconnecting = true;
+        this.isClientReady = false;
+
+        // إلغاء أي مؤقتات نشطة
+        if (this._reconnectTimeout) {
+            clearTimeout(this._reconnectTimeout);
+            this._reconnectTimeout = null;
+        }
+        if (this._initRetryTimeout) {
+            clearTimeout(this._initRetryTimeout);
+            this._initRetryTimeout = null;
+        }
+        if (this._unreadSyncTimeout) {
+            clearTimeout(this._unreadSyncTimeout);
+            this._unreadSyncTimeout = null;
+        }
+
+        // إغلاق العميل القديم والمتصفح بشكل نظيف
+        if (this.client) {
+            try {
+                console.log('🛑 جاري إغلاق عميل واتساب القديم ومتصفحه...');
+                this.client.removeAllListeners();
+                if (this.client.pupBrowser && typeof this.client.pupBrowser.close === 'function') {
+                    await this.client.pupBrowser.close().catch(() => {});
+                }
+                if (typeof this.client.destroy === 'function') {
+                    await this.client.destroy().catch(() => {});
+                }
+            } catch (destroyErr) {
+                console.log('⚠️ خطأ أثناء تدمير العميل السابق:', destroyErr.message);
+            }
+            this.client = null;
+        }
+
         this._removeChromiumLocks();
 
         this.client = new Client({
@@ -241,10 +302,10 @@ class WhatsAppBot extends EventEmitter {
             },
         });
 
-        this.isClientReady = false;
         this.qrCodeData = null;
         this._setupEvents();
-        console.log('🔄 تم إنشاء عميل واتساب جديد');
+        this.isReconnecting = false;
+        console.log('🔄 تم إنشاء عميل واتساب جديد ونظيف');
     }
 
     /**
@@ -1011,19 +1072,39 @@ class WhatsAppBot extends EventEmitter {
      * جلب ومعالجة الرسائل غير المقروءة عند بدء تشغيل البوت لتلافي فترة التوقف
      */
     async processUnreadMessages() {
+        if (this.isSyncingMessages) {
+            console.log('⏳ مزامنة الرسائل غير المقروءة قيد التنفيذ بالفعل...');
+            return;
+        }
+        if (!this.isClientReady || !this.client?.pupPage || this.client.pupPage.isClosed()) {
+            console.log('⚠️ لا يمكن فحص الرسائل: عميل واتساب غير جاهز أو الصفحة مغلقة.');
+            return;
+        }
+
+        this.isSyncingMessages = true;
         try {
             console.log('🔄 جاري فحص الرسائل غير المقروءة والرسائل الفائتة أثناء توقف البوت...');
             
             // الانتظار حتى تكتمل مزامنة المحادثات من خادم واتساب ويب
             let stats = { total: 0, unread: 0 };
             for (let i = 0; i < 6; i++) {
-                stats = await this.client.pupPage.evaluate(() => {
-                    const ChatCollection = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
-                    if (!ChatCollection || typeof ChatCollection.getModelsArray !== 'function') return { total: 0, unread: 0 };
-                    const chats = ChatCollection.getModelsArray();
-                    const unread = chats.filter(c => c && c.unreadCount > 0).length;
-                    return { total: chats.length, unread };
-                });
+                if (!this.isClientReady || !this.client?.pupPage || this.client.pupPage.isClosed()) {
+                    console.log('⚠️ توقف فحص المحادثات: انقطع اتصال واتساب.');
+                    return;
+                }
+
+                try {
+                    stats = await this.client.pupPage.evaluate(() => {
+                        const ChatCollection = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
+                        if (!ChatCollection || typeof ChatCollection.getModelsArray !== 'function') return { total: 0, unread: 0 };
+                        const chats = ChatCollection.getModelsArray();
+                        const unread = chats.filter(c => c && c.unreadCount > 0).length;
+                        return { total: chats.length, unread };
+                    });
+                } catch (evalErr) {
+                    console.log(`⚠️ تعذر تقييم حالة المحادثات (${i + 1}/6):`, evalErr.message);
+                    break;
+                }
                 
                 console.log(`📊 فحص مزامنة المحادثات (${i + 1}/6): الإجمالي المحمل=${stats.total}, غير المقروءة=${stats.unread}`);
                 
@@ -1035,30 +1116,40 @@ class WhatsAppBot extends EventEmitter {
                 await this._sleep(5000);
             }
 
+            if (!this.isClientReady || !this.client?.pupPage || this.client.pupPage.isClosed()) {
+                return;
+            }
+
             // جلب كل المجموعات المراقبة النشطة في الحساب
-            const groupsToSync = await this.client.pupPage.evaluate((monitoredGroups) => {
-                const ChatCollection = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
-                if (!ChatCollection || typeof ChatCollection.getModelsArray !== 'function') return [];
-                
-                return ChatCollection.getModelsArray()
-                    .filter(c => {
-                        if (!c || !c.id) return false;
-                        const isGrp = (c.id._serialized && c.id._serialized.endsWith('@g.us')) ||
-                                      c.id.server === 'g.us' ||
-                                      Boolean(c.groupMetadata);
-                        return isGrp && !c.isNewsletter && !c.isChannel;
-                    })
-                    .map(c => ({
-                        id: c.id?._serialized || c.id,
-                        name: c.formattedTitle || c.name || c.contact?.name || c.contact?.pushname || 'Unknown Group',
-                        unreadCount: c.unreadCount || 0
-                    }))
-                    .filter(g => {
-                        if (monitoredGroups === 'all') return true;
-                        const groups = Array.isArray(monitoredGroups) ? monitoredGroups : monitoredGroups.split(',').map(name => name.trim());
-                        return groups.includes(g.id) || groups.includes(g.name);
-                    });
-            }, this.monitoredGroups);
+            let groupsToSync = [];
+            try {
+                groupsToSync = await this.client.pupPage.evaluate((monitoredGroups) => {
+                    const ChatCollection = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
+                    if (!ChatCollection || typeof ChatCollection.getModelsArray !== 'function') return [];
+                    
+                    return ChatCollection.getModelsArray()
+                        .filter(c => {
+                            if (!c || !c.id) return false;
+                            const isGrp = (c.id._serialized && c.id._serialized.endsWith('@g.us')) ||
+                                          c.id.server === 'g.us' ||
+                                          Boolean(c.groupMetadata);
+                            return isGrp && !c.isNewsletter && !c.isChannel;
+                        })
+                        .map(c => ({
+                            id: c.id?._serialized || c.id,
+                            name: c.formattedTitle || c.name || c.contact?.name || c.contact?.pushname || 'Unknown Group',
+                            unreadCount: c.unreadCount || 0
+                        }))
+                        .filter(g => {
+                            if (monitoredGroups === 'all') return true;
+                            const groups = Array.isArray(monitoredGroups) ? monitoredGroups : monitoredGroups.split(',').map(name => name.trim());
+                            return groups.includes(g.id) || groups.includes(g.name);
+                        });
+                }, this.monitoredGroups);
+            } catch (grpListErr) {
+                console.error('⚠️ خطأ أثناء جلب قائمة المجموعات:', grpListErr.message);
+                return;
+            }
 
             if (!groupsToSync || groupsToSync.length === 0) {
                 console.log('📝 لا توجد مجموعات مراقبة للمزامنة.');
@@ -1071,6 +1162,12 @@ class WhatsAppBot extends EventEmitter {
             const Message = require('whatsapp-web.js/src/structures/Message');
 
             for (const group of groupsToSync) {
+                // التحقق قبل كل مجموعة: إذا انقطع الاتصال أو أُغلق المتصفح نتوقف فوراً!
+                if (!this.isClientReady || !this.client?.pupPage || this.client.pupPage.isClosed()) {
+                    console.log('⚠️ تم إيقاف مزامنة المجموعات: انقطع اتصال واتساب.');
+                    break;
+                }
+
                 const groupId = group.id;
                 const groupName = group.name;
                 
@@ -1126,6 +1223,12 @@ class WhatsAppBot extends EventEmitter {
 
                     let groupProcessedCount = 0;
                     for (const rawMsg of rawMsgs) {
+                        // تحقق أيضاً أثناء معالجة الرسائل
+                        if (!this.isClientReady || !this.client?.pupPage || this.client.pupPage.isClosed()) {
+                            console.log('⚠️ تم إيقاف معالجة الرسائل: انقطع اتصال واتساب.');
+                            break;
+                        }
+
                         const msgId = rawMsg.id._serialized;
                         
                         // تخطي الرسالة إذا تم معالجتها مسبقاً وتخزينها في قاعدة البيانات
@@ -1148,14 +1251,19 @@ class WhatsAppBot extends EventEmitter {
                     }
 
                     // وضع علامة مقروءة للمجموعة
-                    if (group.unreadCount > 0) {
+                    if (group.unreadCount > 0 && this.isClientReady && this.client?.pupPage && !this.client.pupPage.isClosed()) {
                         await this.client.pupPage.evaluate(async (chatId) => {
                             return await window.WWebJS.sendSeen(chatId);
-                        }, groupId);
+                        }, groupId).catch(() => {});
                     }
 
                 } catch (grpErr) {
                     console.error(`❌ فشل مزامنة الرسائل للمجموعة ${groupName}:`, grpErr.message || grpErr);
+                    // إذا كان الخطأ بسبب تدمير السياق أو قطع الاتصال، نوقف الدوران
+                    if (grpErr.message && (grpErr.message.includes('destroyed') || grpErr.message.includes('Target closed') || grpErr.message.includes('Session closed'))) {
+                        console.log('⚠️ انقطع سياق التصفح أثناء المزامنة — إيقاف الدوران.');
+                        break;
+                    }
                 }
             }
 
@@ -1167,6 +1275,40 @@ class WhatsAppBot extends EventEmitter {
         } catch (error) {
             console.error('❌ خطأ أثناء فحص الرسائل غير المقروءة:');
             console.error(error instanceof Error ? (error.stack || error.message) : error);
+        } finally {
+            this.isSyncingMessages = false;
+        }
+    }
+
+    /**
+     * إغلاق البوت والعميل بشكل آمن
+     */
+    async destroy() {
+        this.isDestroyed = true;
+        this.isClientReady = false;
+        if (this._reconnectTimeout) {
+            clearTimeout(this._reconnectTimeout);
+            this._reconnectTimeout = null;
+        }
+        if (this._initRetryTimeout) {
+            clearTimeout(this._initRetryTimeout);
+            this._initRetryTimeout = null;
+        }
+        if (this._unreadSyncTimeout) {
+            clearTimeout(this._unreadSyncTimeout);
+            this._unreadSyncTimeout = null;
+        }
+        if (this.client) {
+            try {
+                this.client.removeAllListeners();
+                if (this.client.pupBrowser && typeof this.client.pupBrowser.close === 'function') {
+                    await this.client.pupBrowser.close().catch(() => {});
+                }
+                if (typeof this.client.destroy === 'function') {
+                    await this.client.destroy().catch(() => {});
+                }
+            } catch (e) {}
+            this.client = null;
         }
     }
 }

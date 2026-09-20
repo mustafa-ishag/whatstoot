@@ -21,10 +21,16 @@ class BackupService {
         this.backupDir = path.join(config.BASE_PATH, 'storage', 'backups');
         this.intervalId = null;
 
-        if (!fs.existsSync(this.backupDir)) {
-            try {
-                fs.mkdirSync(this.backupDir, { recursive: true });
-            } catch (e) {}
+        this._ensureBackupDir();
+    }
+
+    _ensureBackupDir() {
+        try {
+            if (!fs.existsSync(this.backupDir)) {
+                fs.mkdirSync(this.backupDir, { recursive: true, mode: 0o755 });
+            }
+        } catch (e) {
+            console.error('⚠️ [BackupService] فشل إنشاء مجلد النسخ الاحتياطية:', e.message);
         }
     }
 
@@ -39,6 +45,8 @@ class BackupService {
                 throw new Error('Database instance not ready');
             }
 
+            this._ensureBackupDir();
+
             const now = new Date();
             const dateStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
             const fileName = `backup_${dateStr}.sqlite`;
@@ -46,8 +54,19 @@ class BackupService {
 
             console.log(`💾 [BackupService] جاري إنشاء نسخة احتياطية: ${fileName}...`);
 
-            // استخدام دالة backup المدمجة في better-sqlite3
-            await rawDb.backup(destPath);
+            // محاولة استخدام دالة backup المدمجة في better-sqlite3
+            try {
+                await rawDb.backup(destPath);
+            } catch (backupErr) {
+                console.warn(`⚠️ [BackupService] فشل backup المباشر (${backupErr.message})، جاري المحاولة بطريقة النسخ المباشر مع WAL checkpoint...`);
+                // تفريغ سجل الـ WAL إلى ملف قاعدة البيانات الأصلي لضمان تطابق البيانات
+                try {
+                    rawDb.pragma('wal_checkpoint(TRUNCATE)');
+                } catch (cpErr) {}
+
+                // نسخ ملف قاعدة البيانات الأصلي
+                fs.copyFileSync(config.DB_PATH, destPath);
+            }
 
             const sizeBytes = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0;
             const mb = (sizeBytes / (1024 * 1024)).toFixed(2);
