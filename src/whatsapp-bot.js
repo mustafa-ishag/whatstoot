@@ -219,18 +219,19 @@ class WhatsAppBot extends EventEmitter {
                     };
                 }
 
-                // 2. إصلاح sendMessage: حماية message.id من المسح بسبب mediaOptions.toJSON()
+                // 2. إصلاح sendMessage: حماية message.id من المسح بسبب mediaOptions.toJSON() والتعامل مع أخطاء LID
                 if (window.WWebJS.sendMessage && !window.WWebJS._origSendMessage) {
                     window.WWebJS._origSendMessage = window.WWebJS.sendMessage;
                     window.WWebJS.sendMessage = async function(chat, content, options = {}) {
                         try {
                             return await window.WWebJS._origSendMessage(chat, content, options);
                         } catch (err) {
-                            // إذا حدث خطأ memoize id property، إعادة المحاولة مع تصحيح معرف الرسالة
-                            if (err.message && err.message.includes('id property')) {
+                            // إذا حدث خطأ memoize id property أو خطأ No LID for user، إعادة المحاولة مع تصحيح المعرف
+                            if (err.message && (err.message.includes('id property') || err.message.includes('No LID for user') || err.message.includes('LID'))) {
                                 const newId = await window.require('WAWebMsgKey').newId();
-                                const { getMaybeMeLidUser, getMaybeMePnUser } = window.require('WAWebUserPrefsMeUser');
-                                const from = chat.id.isLid() ? getMaybeMeLidUser() : getMaybeMePnUser();
+                                const { getMaybeMePnUser, getMaybeMeLidUser } = window.require('WAWebUserPrefsMeUser');
+                                const meUser = getMaybeMePnUser() || getMaybeMeLidUser();
+                                const from = (chat.id.isLid && chat.id.isLid()) ? (getMaybeMeLidUser() || meUser) : meUser;
                                 const newMsgKey = new (window.require('WAWebMsgKey'))({
                                     from: from,
                                     to: chat.id,
@@ -273,8 +274,49 @@ class WhatsAppBot extends EventEmitter {
                         }
                     };
                 }
+
+                // 3. إصلاح خطأ No LID for user في دوال هجرة المعرفات (WAWebLidMigrationUtils & WAWebLid1X1MigrationGating)
+                const LidUtils = window.require?.('WAWebLidMigrationUtils');
+                if (LidUtils) {
+                    for (const key of Object.keys(LidUtils)) {
+                        if (typeof LidUtils[key] === 'function' && !LidUtils['__orig_' + key]) {
+                            const origFn = LidUtils[key];
+                            LidUtils['__orig_' + key] = origFn;
+                            LidUtils[key] = function(...args) {
+                                try {
+                                    return origFn.apply(this, args);
+                                } catch (err) {
+                                    if (err.message && (err.message.includes('No LID for user') || err.message.includes('LID'))) {
+                                        return args[0]; // الرجوع للمعرف الأصلي WID
+                                    }
+                                    throw err;
+                                }
+                            };
+                        }
+                    }
+                }
+
+                const Lid1X1 = window.require?.('WAWebLid1X1MigrationGating');
+                if (Lid1X1) {
+                    for (const key of Object.keys(Lid1X1)) {
+                        if (typeof Lid1X1[key] === 'function' && !Lid1X1['__orig_' + key]) {
+                            const origFn = Lid1X1[key];
+                            Lid1X1['__orig_' + key] = origFn;
+                            Lid1X1[key] = function(...args) {
+                                try {
+                                    return origFn.apply(this, args);
+                                } catch (err) {
+                                    if (err.message && (err.message.includes('No LID for user') || err.message.includes('LID'))) {
+                                        return false;
+                                    }
+                                    throw err;
+                                }
+                            };
+                        }
+                    }
+                }
             });
-            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize بنجاح');
+            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize & LID بنجاح');
         } catch (e) {
             // صامت
         }
@@ -334,7 +376,7 @@ class WhatsAppBot extends EventEmitter {
                 sendMediaAsDocument: true
             });
         } catch (err) {
-            if (err.message && err.message.includes('id property')) {
+            if (err.message && (err.message.includes('id property') || err.message.includes('No LID for user') || err.message.includes('LID'))) {
                 // محاولة إضافية عبر إعادة تطبيق الإصلاح والإرسال المباشر
                 await this._applyPuppeteerFixes();
                 return await this.client.sendMessage(targetId, media, {
