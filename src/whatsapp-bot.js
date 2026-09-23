@@ -501,8 +501,103 @@ class WhatsAppBot extends EventEmitter {
                     };
                 }
 
+                // 4. إصلاح resolveMediaBlob لتفادي خطأ (r: r) واستخراج الميديا بدقة حتى مع مستخدمي LID
+                if (window.WWebJS && !window.WWebJS._origResolveMediaBlob) {
+                    window.WWebJS._origResolveMediaBlob = window.WWebJS.resolveMediaBlob;
+                    window.WWebJS.resolveMediaBlob = async function(msgId) {
+                        try {
+                            const { Msg } = window.require('WAWebCollections');
+                            let msg = Msg.get(msgId);
+
+                            // محاولة 1: البحث المباشر في نماذج الرسائل المحملة
+                            if (!msg && typeof msgId === 'string') {
+                                const parts = msgId.split('_');
+                                const cleanId = parts.length > 2 ? parts[2] : msgId;
+                                const models = Msg.getModelsArray ? Msg.getModelsArray() : (Msg.models || []);
+                                msg = models.find(m => {
+                                    if (!m || !m.id) return false;
+                                    const serialized = m.id._serialized || m.id.toString?.();
+                                    return serialized === msgId || (m.id.id && m.id.id === cleanId);
+                                });
+                            }
+
+                            // محاولة 2: البحث داخل Chat.msgs
+                            if (!msg && window.require) {
+                                try {
+                                    const ChatCol = window.require('WAWebCollections')?.Chat || window.Store?.Chat;
+                                    if (ChatCol && typeof ChatCol.getModelsArray === 'function') {
+                                        const chats = ChatCol.getModelsArray();
+                                        for (const chat of chats) {
+                                            if (chat && chat.msgs) {
+                                                const msgs = chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : [];
+                                                const found = msgs.find(m => {
+                                                    if (!m || !m.id) return false;
+                                                    const serialized = m.id._serialized || m.id.toString?.();
+                                                    return serialized === msgId || (m.id.id && msgId.includes(m.id.id));
+                                                });
+                                                if (found) {
+                                                    msg = found;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (e) {}
+                            }
+
+                            // محاولة 3: استدعاء getMessagesById
+                            if (!msg && Msg.getMessagesById) {
+                                try {
+                                    const res = await Msg.getMessagesById([msgId]);
+                                    if (res && res.messages && res.messages.length) {
+                                        msg = res.messages[0];
+                                    }
+                                } catch (e) {}
+                            }
+
+                            if (!msg) {
+                                if (window.WWebJS._origResolveMediaBlob) {
+                                    return await window.WWebJS._origResolveMediaBlob(msgId);
+                                }
+                                return null;
+                            }
+
+                            // بدء تنزيل الميديا إذا لم تكن جاهزة
+                            if (typeof msg.downloadMedia === 'function') {
+                                await msg.downloadMedia({
+                                    downloadEvenIfExpensive: true,
+                                    rmrReason: 1,
+                                    isUserInitiated: true,
+                                }).catch(() => {});
+                            }
+
+                            const InMemoryCache = window.require('WAWebMediaInMemoryBlobCache')?.InMemoryMediaBlobCache;
+                            const cached = InMemoryCache ? InMemoryCache.get(msg.mediaObject?.filehash) : null;
+                            let blob = cached || (msg.mediaObject?.mediaBlob?.forceToBlob ? msg.mediaObject.mediaBlob.forceToBlob() : null);
+
+                            if (!blob && msg.mediaObject?.mediaBlob) {
+                                blob = msg.mediaObject.mediaBlob;
+                            }
+
+                            if (!blob) return null;
+
+                            return {
+                                blob,
+                                mimetype: msg.mimetype || msg.mediaData?.mimetype || 'image/jpeg',
+                                filename: msg.filename || msg.mediaData?.filename || null,
+                                filesize: msg.size || msg.mediaData?.size || (blob.size || 0)
+                            };
+                        } catch (e) {
+                            if (window.WWebJS._origResolveMediaBlob) {
+                                return await window.WWebJS._origResolveMediaBlob(msgId).catch(() => null);
+                            }
+                            return null;
+                        }
+                    };
+                }
+
             });
-            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize بنجاح');
+            console.log('🛡️ تم تفعيل حماية Puppeteer ضد أخطاء WhatsApp Web memoize و resolveMediaBlob بنجاح');
         } catch (e) {
             if (e.message && (e.message.includes('Execution context was destroyed') || e.message.includes('Cannot find context')) && retries > 0) {
                 await new Promise(r => setTimeout(r, 1500));
@@ -657,6 +752,26 @@ class WhatsAppBot extends EventEmitter {
 
             // تجاهل رسائل الحالة والمحادثات الفردية مبكراً لتجنب أخطاء Puppeteer (مثل خطأ r: r)
             if (!msg.from || !msg.from.includes('@g.us')) return;
+
+            // تجاهل الرسائل الإدارية وإشعارات النظام التي لا تحتوي وسائط أو نصوص
+            const ignoredTypes = [
+                'message_history_notice',
+                'notification_template',
+                'e2e_notification',
+                'call_log',
+                'gp2',
+                'protocol',
+                'revoked'
+            ];
+            if (ignoredTypes.includes(msg.type)) {
+                if (msg.id?._serialized) {
+                    try {
+                        const db = require('./database');
+                        db.markMessageProcessed(msg.id._serialized, msg.from);
+                    } catch (e) {}
+                }
+                return;
+            }
 
             let groupId = msg.from;
             let groupName = 'Unknown Group';
@@ -838,6 +953,13 @@ class WhatsAppBot extends EventEmitter {
         } catch (error) {
             console.error('❌ خطأ في معالجة الرسالة:', error instanceof Error ? (error.stack || error.message) : error);
             this.stats.errors++;
+        } finally {
+            if (msg?.id?._serialized) {
+                try {
+                    const db = require('./database');
+                    db.markMessageProcessed(msg.id._serialized, msg.from);
+                } catch (e) {}
+            }
         }
     }
 
@@ -1035,7 +1157,8 @@ class WhatsAppBot extends EventEmitter {
     /**
      * تحميل الميديا مع إعادة محاولة وتأخير وطريقة بديلة
      */
-    async _downloadMediaWithRetry(msg, maxRetries = 3, delayMs = 3000) {
+    async _downloadMediaWithRetry(msg, maxRetries = 2, delayMs = 1000) {
+        if (!msg || !msg.hasMedia) return null;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 // المحاولة بالطريقة العادية أولاً
@@ -1184,13 +1307,16 @@ class WhatsAppBot extends EventEmitter {
                     db.saveGroup(groupId, groupName, group.unreadCount || 0);
                 } catch (e) {}
 
-                // نقوم بمزامنة المجموعة إذا كانت تحتوي رسائل غير مقروءة، أو نقوم بمزامنة آخر 100 رسالة بشكل عام للتحقق
-                const limit = Math.max(syncLimit, group.unreadCount || 0);
+                // تحديد عدد الرسائل المطلوب فحصها:
+                // إذا كانت هناك رسائل غير مقروءة، نفحصها بدقة ونحمل السابقة إن لزم
+                // وإلا نفحص فقط آخر الرسائل المحملة بالذاكرة لتوفير المعالج والذاكرة
+                const hasUnread = (group.unreadCount || 0) > 0;
+                const limit = hasUnread ? Math.min(100, Math.max(20, (group.unreadCount || 0) + 5)) : 20;
 
-                console.log(`🔄 جاري مزامنة وفحص آخر ${limit} رسالة في المجموعة: ${groupName}...`);
+                console.log(`🔄 جاري فحص ومزامنة ${hasUnread ? 'رسائل غير مقروءة' : 'آخر الرسائل'} (${limit}) في المجموعة: ${groupName}...`);
                 
                 try {
-                    const rawMsgs = await this.client.pupPage.evaluate(async (chatId, limit) => {
+                    const rawMsgs = await this.client.pupPage.evaluate(async (chatId, limit, hasUnread) => {
                         const WidFactory = window.require?.('WAWebWidFactory');
                         const ChatCol = (window.require && window.require('WAWebCollections')?.Chat) || window.Store?.Chat;
                         const FindChat = window.require?.('WAWebFindChatAction');
@@ -1209,14 +1335,16 @@ class WhatsAppBot extends EventEmitter {
 
                         let msgs = chat.msgs.getModelsArray ? chat.msgs.getModelsArray().filter(msgFilter) : [];
                         
-                        // تحميل الرسائل السابقة إذا لم تكن كافية
-                        let attempts = 0;
-                        const ChatLoad = window.require?.('WAWebChatLoadMessages');
-                        while (msgs.length < limit && attempts < 5 && ChatLoad) {
-                            attempts++;
-                            const loadedMessages = await ChatLoad.loadEarlierMsgs({ chat });
-                            if (!loadedMessages || !loadedMessages.length) break;
-                            msgs = [...loadedMessages.filter(msgFilter), ...msgs];
+                        // تحميل الرسائل السابقة فقط إذا كانت هناك رسائل غير مقروءة تتجاوز ما في الذاكرة
+                        if (hasUnread && msgs.length < limit) {
+                            let attempts = 0;
+                            const ChatLoad = window.require?.('WAWebChatLoadMessages');
+                            while (msgs.length < limit && attempts < 3 && ChatLoad) {
+                                attempts++;
+                                const loadedMessages = await ChatLoad.loadEarlierMsgs({ chat });
+                                if (!loadedMessages || !loadedMessages.length) break;
+                                msgs = [...loadedMessages.filter(msgFilter), ...msgs];
+                            }
                         }
 
                         const slicedMsgs = msgs.slice(-limit);
@@ -1227,7 +1355,7 @@ class WhatsAppBot extends EventEmitter {
                                 return null;
                             }
                         }).filter(Boolean);
-                    }, groupId, limit);
+                    }, groupId, limit, hasUnread);
 
                     let groupProcessedCount = 0;
                     for (const rawMsg of rawMsgs) {
@@ -1237,10 +1365,18 @@ class WhatsAppBot extends EventEmitter {
                             break;
                         }
 
-                        const msgId = rawMsg.id._serialized;
+                        const msgId = rawMsg.id?._serialized;
+                        if (!msgId) continue;
                         
                         // تخطي الرسالة إذا تم معالجتها مسبقاً وتخزينها في قاعدة البيانات
                         if (db.isMessageProcessed(msgId)) {
+                            continue;
+                        }
+
+                        // تخطي الرسائل الإدارية وتوثيقها فوراً لمنع تكرارها مستقبلاً
+                        const ignoredTypes = ['message_history_notice', 'notification_template', 'e2e_notification', 'call_log', 'gp2', 'protocol', 'revoked'];
+                        if (ignoredTypes.includes(rawMsg.type)) {
+                            db.markMessageProcessed(msgId, groupId);
                             continue;
                         }
 
@@ -1251,6 +1387,8 @@ class WhatsAppBot extends EventEmitter {
                             totalProcessed++;
                         } catch (msgErr) {
                             console.error(`❌ خطأ أثناء معالجة رسالة سابقة:`, msgErr.message || msgErr);
+                        } finally {
+                            db.markMessageProcessed(msgId, groupId);
                         }
                     }
 

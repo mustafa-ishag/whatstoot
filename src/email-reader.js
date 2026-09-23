@@ -130,10 +130,10 @@ class EmailReader {
             const lock = await client.getMailboxLock('INBOX');
 
             try {
-                // البحث عن الرسائل غير المقروءة
-                const messages = await client.search({ seen: false });
+                // البحث عن الرسائل غير المقروءة باستخدام UID الحقيقي
+                const messages = await client.search({ seen: false }, { uid: true });
 
-                if (messages.length === 0) {
+                if (!messages || messages.length === 0) {
                     console.log('📧 لا توجد رسائل جديدة');
                     this.stats.lastCheck = new Date().toISOString();
                     return;
@@ -184,6 +184,13 @@ class EmailReader {
      * معالجة رسالة بريد واحدة
      */
     async _processEmail(client, uid) {
+        // فحص محلي فوري لتفادي التكرار
+        if (db.isEmailProcessed(uid)) {
+            console.log(`📧 ⏩ البريد UID ${uid} تمت معالجته مسبقاً — تم تخطيه.`);
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }).catch(() => {});
+            return;
+        }
+
         // جلب المحتوى الخام للرسالة كاملاً بشكل مضمون ومباشر
         const message = await client.fetchOne(uid, { source: true }, { uid: true });
         if (!message || !message.source) {
@@ -191,6 +198,13 @@ class EmailReader {
             return;
         }
         const parsed = await simpleParser(message.source);
+        const messageId = parsed.messageId || null;
+
+        if (messageId && db.isEmailProcessed(null, messageId)) {
+            console.log(`📧 ⏩ الرسالة ${messageId} تمت معالجتها مسبقاً — تم تخطيها.`);
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }).catch(() => {});
+            return;
+        }
 
         const subject = parsed.subject || 'بدون موضوع';
         const from = parsed.from?.text || 'Unknown';
@@ -222,6 +236,8 @@ class EmailReader {
         const attachments = parsed.attachments || [];
         if (attachments.length === 0) {
             console.log('📧 ⏩ لا توجد مرفقات — تخطي');
+            db.markEmailProcessed(uid, messageId, workOrder, subject);
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }).catch(() => {});
             return;
         }
 
@@ -319,7 +335,8 @@ class EmailReader {
                 await this._archiveToSynology(pdfFilesToSend, workOrder);
             }
 
-            // تعليم الرسالة كمقروءة فقط بعد نجاح الإرسال والأرشفة
+            // تعليم الرسالة كمقروءة وحفظها محلياً بعد نجاح الإرسال والأرشفة
+            db.markEmailProcessed(uid, messageId, workOrder, subject);
             try {
                 await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
                 this.failedUids.delete(uid);
@@ -332,6 +349,7 @@ class EmailReader {
             this.failedUids.set(uid, failCount);
             if (failCount >= 3) {
                 console.error(`📧 ⚠️ فشلت معالجة الرسالة ${uid} لـ 3 مرات متتالية — سيتم تعليمها كمقروءة لتفادي التكرار`);
+                db.markEmailProcessed(uid, messageId, workOrder, subject);
                 try {
                     await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
                 } catch (e) {}
@@ -414,9 +432,12 @@ class EmailReader {
      */
     async _sendPdfsViaWhatsApp(pdfFiles, workOrder, subject) {
         // تحديد جهة الإرسال (مجموعة أو رقم)
-        let target = db.getSetting('email_whatsapp_target') || this.whatsappNumber;
-        if (!target) {
-            console.log('📧 ⚠️ لم يتم تحديد جهة استقبال لإشعارات البريد (email_whatsapp_target)');
+        let target = db.getSetting('email_whatsapp_target');
+        if (!target || target === '0' || target.trim().length < 5) {
+            target = this.whatsappNumber;
+        }
+        if (!target || target === '0' || target.trim().length < 5) {
+            console.log('📧 ⚠️ لم يتم تحديد جهة استقبال صالحة لإشعارات البريد (email_whatsapp_target)');
             return;
         }
 

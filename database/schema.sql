@@ -91,6 +91,26 @@ CREATE INDEX IF NOT EXISTS idx_queue_group ON queue(group_id, status);
 CREATE INDEX IF NOT EXISTS idx_log_level ON activity_log(level, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_groups_last_active ON groups(last_active DESC);
 
+-- جدول تتبع رسائل البريد الإلكتروني المعالجة لمنع تكرار الإرسال نهائياً
+CREATE TABLE IF NOT EXISTS email_processed (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid          TEXT UNIQUE,
+    message_id   TEXT,
+    work_order   TEXT,
+    subject      TEXT,
+    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_email_processed_uid ON email_processed(uid);
+CREATE INDEX IF NOT EXISTS idx_email_processed_msgid ON email_processed(message_id);
+
+-- جدول تتبع رسائل واتساب المعالجة لتسريع الإقلاع وتفادي التكرار
+CREATE TABLE IF NOT EXISTS processed_messages (
+    id           TEXT PRIMARY KEY,
+    group_id     TEXT,
+    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_processed_messages_id ON processed_messages(id);
+
 -- =============================================
 -- إعدادات افتراضية
 -- =============================================

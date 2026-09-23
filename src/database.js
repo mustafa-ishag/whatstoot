@@ -370,14 +370,92 @@ function updateUploadWorkOrder(id, toWO, driveId = null) {
 function isMessageProcessed(messageId) {
     if (!messageId) return false;
     const db = getInstance();
-    
-    // فحص الرفعات الناجحة أو المكررة
-    const rowUpload = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE message_id = ?").get(messageId);
-    if (rowUpload.c > 0) return true;
-    
-    // فحص الطابور
-    const rowQueue = db.prepare("SELECT COUNT(*) as c FROM queue WHERE message_id = ?").get(messageId);
-    return rowQueue.c > 0;
+    try {
+        const row = db.prepare("SELECT 1 FROM processed_messages WHERE id = ?").get(messageId);
+        if (row) return true;
+        const rowUpload = db.prepare("SELECT 1 FROM uploads WHERE message_id = ?").get(messageId);
+        if (rowUpload) return true;
+        const rowQueue = db.prepare("SELECT 1 FROM queue WHERE message_id = ?").get(messageId);
+        if (rowQueue) return true;
+    } catch (e) {
+        try {
+            db.exec(`CREATE TABLE IF NOT EXISTS processed_messages (id TEXT PRIMARY KEY, group_id TEXT, processed_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
+        } catch (err) {}
+    }
+    return false;
+}
+
+function markMessageProcessed(messageId, groupId = null) {
+    if (!messageId) return;
+    const db = getInstance();
+    try {
+        db.prepare("INSERT OR IGNORE INTO processed_messages (id, group_id) VALUES (?, ?)").run(messageId, groupId);
+    } catch (e) {
+        try {
+            db.exec(`CREATE TABLE IF NOT EXISTS processed_messages (id TEXT PRIMARY KEY, group_id TEXT, processed_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
+            db.prepare("INSERT OR IGNORE INTO processed_messages (id, group_id) VALUES (?, ?)").run(messageId, groupId);
+        } catch (err) {}
+    }
+}
+
+// =============================================
+// 📧 Email Tracking & Deduplication
+// =============================================
+
+function isEmailProcessed(uid, messageId = null) {
+    if (!uid && !messageId) return false;
+    const db = getInstance();
+    try {
+        if (uid) {
+            const row = db.prepare('SELECT id FROM email_processed WHERE uid = ?').get(String(uid));
+            if (row) return true;
+        }
+        if (messageId) {
+            const row = db.prepare('SELECT id FROM email_processed WHERE message_id = ?').get(String(messageId));
+            if (row) return true;
+        }
+    } catch (e) {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS email_processed (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uid          TEXT UNIQUE,
+                    message_id   TEXT,
+                    work_order   TEXT,
+                    subject      TEXT,
+                    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+        } catch (err) {}
+    }
+    return false;
+}
+
+function markEmailProcessed(uid, messageId = null, workOrder = null, subject = null) {
+    const db = getInstance();
+    try {
+        db.prepare(`
+            INSERT OR REPLACE INTO email_processed (uid, message_id, work_order, subject, processed_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(String(uid || ''), String(messageId || ''), String(workOrder || ''), String(subject || ''));
+    } catch (e) {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS email_processed (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uid          TEXT UNIQUE,
+                    message_id   TEXT,
+                    work_order   TEXT,
+                    subject      TEXT,
+                    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+            db.prepare(`
+                INSERT OR REPLACE INTO email_processed (uid, message_id, work_order, subject, processed_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            `).run(String(uid || ''), String(messageId || ''), String(workOrder || ''), String(subject || ''));
+        } catch (err) {}
+    }
 }
 
 // =============================================
@@ -548,9 +626,12 @@ module.exports = {
     cleanOldLogs,
     // Stats
     getStats,
-    // Duplicate
+    // Duplicate & Email
     isDuplicate,
     isMessageProcessed,
+    markMessageProcessed,
+    isEmailProcessed,
+    markEmailProcessed,
     // Reset & Move
     resetWorkOrder, getUploadsForMove, updateUploadWorkOrder,
     // Groups

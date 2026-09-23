@@ -46,7 +46,7 @@ function hkdf(key, length, info) {
 function downloadFromUrl(url) {
     return new Promise((resolve, reject) => {
         const client = url.startsWith('https') ? https : http;
-        const request = client.get(url, { timeout: 30000 }, (res) => {
+        const request = client.get(url, { timeout: 15000 }, (res) => {
             if (res.statusCode === 301 || res.statusCode === 302) {
                 return downloadFromUrl(res.headers.location).then(resolve).catch(reject);
             }
@@ -70,70 +70,104 @@ function downloadFromUrl(url) {
  * فك تشفير ميديا واتساب
  * 
  * @param {Buffer} encData - البيانات المشفرة
- * @param {Buffer} mediaKeyRaw - مفتاح الميديا (غير موسّع)
+ * @param {any} mediaKeyRaw - مفتاح الميديا (غير موسّع)
  * @param {string} mediaType - نوع الميديا (image, video, audio, document, sticker, ptt)
- * @returns {Buffer} البيانات المفكوكة
+ * @returns {Buffer|null} البيانات المفكوكة أو null عند الفشل
  */
 function decryptMedia(encData, mediaKeyRaw, mediaType) {
-    const info = MEDIA_HKDF_INFO[mediaType] || MEDIA_HKDF_INFO['image'];
+    try {
+        if (!encData || !Buffer.isBuffer(encData) || encData.length <= 10) {
+            return null;
+        }
 
-    // توسيع المفتاح باستخدام HKDF
-    const expandedKey = hkdf(mediaKeyRaw, 112, info);
+        const info = MEDIA_HKDF_INFO[mediaType] || MEDIA_HKDF_INFO['image'];
 
-    const iv = expandedKey.slice(0, 16);
-    const cipherKey = expandedKey.slice(16, 48);
-    // const macKey = expandedKey.slice(48, 80); // للتحقق من HMAC (اختياري)
+        // تحويل مفتاح الميديا إلى Buffer صالح (32 بايت)
+        let keyBuf = null;
+        if (Buffer.isBuffer(mediaKeyRaw)) {
+            keyBuf = mediaKeyRaw;
+        } else if (typeof mediaKeyRaw === 'string') {
+            keyBuf = Buffer.from(mediaKeyRaw, 'base64');
+        } else if (mediaKeyRaw && typeof mediaKeyRaw._base64 === 'string') {
+            keyBuf = Buffer.from(mediaKeyRaw._base64, 'base64');
+        } else if (mediaKeyRaw && Array.isArray(mediaKeyRaw.data)) {
+            keyBuf = Buffer.from(mediaKeyRaw.data);
+        } else if (mediaKeyRaw instanceof Uint8Array) {
+            keyBuf = Buffer.from(mediaKeyRaw);
+        }
 
-    // فصل البيانات عن MAC (آخر 10 بايت)
-    const file = encData.slice(0, encData.length - 10);
-    // const mac = encData.slice(encData.length - 10);
+        if (!keyBuf || keyBuf.length < 16) {
+            return null;
+        }
 
-    // فك التشفير AES-256-CBC
-    const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
-    decipher.setAutoPadding(true);
+        // توسيع المفتاح باستخدام HKDF المدمج في Node.js إذا توفر
+        let expandedKey;
+        if (typeof crypto.hkdfSync === 'function') {
+            expandedKey = crypto.hkdfSync('sha256', keyBuf, Buffer.alloc(32, 0), Buffer.from(info, 'utf8'), 112);
+        } else {
+            expandedKey = hkdf(keyBuf, 112, info);
+        }
 
-    return Buffer.concat([decipher.update(file), decipher.final()]);
+        const iv = expandedKey.slice(0, 16);
+        const cipherKey = expandedKey.slice(16, 48);
+
+        // فصل البيانات عن MAC (آخر 10 بايت)
+        const file = encData.slice(0, encData.length - 10);
+
+        // فك التشفير AES-256-CBC
+        const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv);
+        decipher.setAutoPadding(true);
+
+        return Buffer.concat([decipher.update(file), decipher.final()]);
+    } catch (e) {
+        return null;
+    }
 }
 
 /**
  * تحميل وفك تشفير ميديا واتساب من بيانات الرسالة الخام
  * 
  * @param {object} msgData - بيانات الرسالة الخام (msg._data)
- * @returns {Promise<{data: string, mimetype: string, filename: string|null}|null>}
+ * @returns {Promise<{data: string, mimetype: string, filename: string|null, filesize: number}|null>}
  */
 async function downloadMediaDirect(msgData) {
-    // استخراج البيانات المطلوبة
-    const mediaKey = msgData.mediaKey;
-    const directPath = msgData.directPath;
-    const mimetype = msgData.mimetype;
-    const type = msgData.type; // image, video, audio, document, sticker, ptt
-    const filename = msgData.filename || null;
+    try {
+        if (!msgData) return null;
 
-    if (!mediaKey || !directPath) {
+        const mediaKey = msgData.mediaKey;
+        const directPath = msgData.directPath;
+        const mimetype = msgData.mimetype;
+        const type = msgData.type || 'image';
+        const filename = msgData.filename || null;
+
+        if (!mediaKey || !directPath) {
+            return null;
+        }
+
+        // بناء URL التحميل
+        const url = `https://mmg.whatsapp.net${directPath}`;
+
+        // تحميل الملف المشفر مع مهلة أقصاها 15 ثانية
+        const encData = await downloadFromUrl(url);
+        if (!encData || encData.length <= 10) {
+            return null;
+        }
+
+        // فك التشفير بأمان
+        const decrypted = decryptMedia(encData, mediaKey, type);
+        if (!decrypted || decrypted.length === 0) {
+            return null;
+        }
+
+        return {
+            data: decrypted.toString('base64'),
+            mimetype: mimetype || 'image/jpeg',
+            filename: filename,
+            filesize: decrypted.length,
+        };
+    } catch (e) {
         return null;
     }
-
-    // بناء URL التحميل
-    const url = `https://mmg.whatsapp.net${directPath}`;
-
-    // تحميل الملف المشفر
-    const encData = await downloadFromUrl(url);
-
-    // فك ترميز مفتاح الميديا من base64
-    const mediaKeyBuffer = Buffer.from(mediaKey, 'base64');
-
-    // فك التشفير
-    const decrypted = decryptMedia(encData, mediaKeyBuffer, type);
-
-    // تحويل إلى base64
-    const base64Data = decrypted.toString('base64');
-
-    return {
-        data: base64Data,
-        mimetype: mimetype,
-        filename: filename,
-        filesize: decrypted.length,
-    };
 }
 
-module.exports = { downloadMediaDirect };
+module.exports = { downloadMediaDirect, decryptMedia };
