@@ -90,7 +90,7 @@ const EMAIL_ENABLED = envBool('EMAIL_ENABLED', false);
 // Admin Email Alert Settings
 // =============================================
 const ALERT_SMTP_HOST = env('ALERT_SMTP_HOST', 'smtp.gmail.com');
-const ALERT_SMTP_PORT = envInt('ALERT_SMTP_PORT', 587);
+const ALERT_SMTP_PORT = envInt('ALERT_SMTP_PORT', 465);
 const ALERT_SMTP_USER = env('ALERT_SMTP_USER', 'asd86064@gmail.com');
 const ALERT_SMTP_PASS = env('ALERT_SMTP_PASS', 'tqxrbosjrlabhcbt');
 const ALERT_EMAIL_TO = env('ALERT_EMAIL_TO', 'musta.ishag@gmail.com');

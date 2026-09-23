@@ -28,16 +28,29 @@ class AlertService {
         try {
             const user = config.ALERT_SMTP_USER || 'asd86064@gmail.com';
             const pass = config.ALERT_SMTP_PASS || 'tqxrbosjrlabhcbt';
+            const host = (config.ALERT_SMTP_HOST || 'smtp.gmail.com').trim();
+            const port = parseInt(config.ALERT_SMTP_PORT || '465', 10);
+            const isGmail = host.toLowerCase().includes('gmail');
 
-            this.transporter = nodemailer.createTransport({
-                host: config.ALERT_SMTP_HOST || 'smtp.gmail.com',
-                port: parseInt(config.ALERT_SMTP_PORT || '587', 10),
-                secure: false, // true for 465, false for 587
-                auth: { user, pass },
-                tls: {
-                    rejectUnauthorized: false
-                }
-            });
+            if (isGmail) {
+                // خدمة Gmail الرسمية تستخدم منفذ 465 المباشر (SSL) لتفادي أخطاء حظر VPS (421 Server busy)
+                this.transporter = nodemailer.createTransport({
+                    service: 'gmail',
+                    name: 'whatstoot.app',
+                    auth: { user, pass }
+                });
+            } else {
+                this.transporter = nodemailer.createTransport({
+                    host,
+                    port,
+                    secure: port === 465,
+                    name: 'whatstoot.app',
+                    auth: { user, pass },
+                    tls: {
+                        rejectUnauthorized: false
+                    }
+                });
+            }
         } catch (e) {
             console.error('❌ [AlertService] فشل تهيئة خادم البريد:', e.message);
         }
@@ -75,8 +88,11 @@ class AlertService {
         if (now - last < this.DEBOUNCE_MS) {
             return false;
         }
-        this.lastAlertTimes.set(alertType, now);
         return true;
+    }
+
+    _markSent(alertType) {
+        this.lastAlertTimes.set(alertType, Date.now());
     }
 
     /**
@@ -126,7 +142,11 @@ class AlertService {
             </div>
         `;
 
-        return this._sendMail({ to, subject, html, attachments });
+        const result = await this._sendMail({ to, subject, html, attachments });
+        if (result && result.success) {
+            this._markSent('qr');
+        }
+        return result;
     }
 
     /**
@@ -154,14 +174,19 @@ class AlertService {
             </div>
         `;
 
-        return this._sendMail({ to, subject, html });
+        const result = await this._sendMail({ to, subject, html });
+        if (result && result.success) {
+            this._markSent('disconnect');
+        }
+        return result;
     }
 
     /**
      * إرسال تنبيه خطأ حرج
      */
     async sendCriticalErrorAlert(title, errorMsg) {
-        if (!this._canSend(`error_${title}`)) return;
+        const alertKey = `error_${title}`;
+        if (!this._canSend(alertKey)) return;
 
         const to = this.getRecipientEmail();
         const subject = `❌ خطأ حرج في WhatsToot: ${title}`;
@@ -181,7 +206,11 @@ class AlertService {
             </div>
         `;
 
-        return this._sendMail({ to, subject, html });
+        const result = await this._sendMail({ to, subject, html });
+        if (result && result.success) {
+            this._markSent(alertKey);
+        }
+        return result;
     }
 
     /**
@@ -210,39 +239,61 @@ class AlertService {
     }
 
     /**
-     * تنفيذ الإرسال الفعلي
+     * تنفيذ الإرسال الفعلي مع إعادة المحاولة ومعالجة أخطاء 421 المؤقتة
      */
-    async _sendMail({ to, subject, html, attachments = [] }) {
-        if (!this.transporter) {
-            this._initTransporter();
-        }
-
-        if (!this.transporter) {
-            console.error('❌ [AlertService] خادم البريد غير مهيأ');
-            return { success: false, message: 'خادم البريد غير مهيأ' };
-        }
-
-        try {
-            const info = await this.transporter.sendMail({
-                from: `"WhatsToot Alerts" <${config.ALERT_SMTP_USER || 'asd86064@gmail.com'}>`,
-                to,
-                subject,
-                html,
-                attachments
-            });
-
-            console.log(`📧 [AlertService] تم إرسال تنبيه إلى: ${to} (MessageId: ${info.messageId})`);
-            if (this.logger && typeof this.logger.info === 'function') {
-                this.logger.info(`Alert email sent to ${to}: ${subject}`);
+    async _sendMail({ to, subject, html, attachments = [] }, retries = 2) {
+        for (let attempt = 1; attempt <= retries + 1; attempt++) {
+            if (!this.transporter) {
+                this._initTransporter();
             }
 
-            return { success: true, messageId: info.messageId };
-        } catch (e) {
-            console.error('❌ [AlertService] فشل إرسال التنبيه بالبريد:', e.message);
-            if (this.logger && typeof this.logger.error === 'function') {
-                this.logger.error(`Failed to send alert email to ${to}: ${e.message}`);
+            if (!this.transporter) {
+                console.error('❌ [AlertService] خادم البريد غير مهيأ');
+                return { success: false, message: 'خادم البريد غير مهيأ' };
             }
-            return { success: false, message: e.message };
+
+            try {
+                const info = await this.transporter.sendMail({
+                    from: `"WhatsToot Alerts" <${config.ALERT_SMTP_USER || 'asd86064@gmail.com'}>`,
+                    to,
+                    subject,
+                    html,
+                    attachments
+                });
+
+                console.log(`📧 [AlertService] تم إرسال تنبيه إلى: ${to} (MessageId: ${info.messageId})`);
+                if (this.logger && typeof this.logger.info === 'function') {
+                    this.logger.info(`Alert email sent to ${to}: ${subject}`);
+                }
+
+                return { success: true, messageId: info.messageId };
+            } catch (e) {
+                console.warn(`⚠️ [AlertService] محاولة إرسال التنبيه (${attempt}/${retries + 1}) فشلت: ${e.message}`);
+                
+                if (attempt <= retries) {
+                    await new Promise(r => setTimeout(r, 2500 * attempt));
+                    // إعادة التهيئة عبر direct SSL لمنفذ 465 في المحاولة التالية
+                    try {
+                        const user = config.ALERT_SMTP_USER || 'asd86064@gmail.com';
+                        const pass = config.ALERT_SMTP_PASS || 'tqxrbosjrlabhcbt';
+                        this.transporter = nodemailer.createTransport({
+                            host: 'smtp.gmail.com',
+                            port: 465,
+                            secure: true,
+                            name: 'whatstoot.app',
+                            auth: { user, pass },
+                            tls: { rejectUnauthorized: false }
+                        });
+                    } catch (reErr) {}
+                    continue;
+                }
+
+                console.error('❌ [AlertService] فشل إرسال التنبيه بالبريد نهائياً:', e.message);
+                if (this.logger && typeof this.logger.error === 'function') {
+                    this.logger.error(`Failed to send alert email to ${to}: ${e.message}`);
+                }
+                return { success: false, message: e.message };
+            }
         }
     }
 }
