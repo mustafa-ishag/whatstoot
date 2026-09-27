@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  whatstoot:
+    build: .
+    container_name: whatstoot-bot
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=Asia/Riyadh
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      - NODE_ENV=production
+    volumes:
+      # حفظ جلسة واتساب حتى لا يطلب مسح الباركود عند إعادة تشغيل الحاوية أو السنولوجي
+      - ./data/.wwebjs_auth:/app/.wwebjs_auth
+      # حفظ قاعدة بيانات أوامر العمل والرسائل المؤرشفة
+      - ./data/database:/app/database
+      # حفظ السجلات والملفات المؤقتة
+      - ./data/storage:/app/storage
+      # ربط ملف الإعدادات
+      - ./.env:/app/.env
+      
+      # 💡 خيار اختياري (للتعديل الفوري المباشر على ملفات الواجهة):
+      # - ./public:/app/public
+      
+      # 💡 خيار متقدم (للحفظ المحلي الفوري بدون استهلاك إنترنت):
+      # يمكنك إلغاء علامة (#) وتغيير المسار لمجلد الصور الفعلي في السنولوجي:
+      # - /volume1/photo/work_orders:/app/storage/work_orders
+
+    # ⚠️ تخصيص مساحة 1 جيجابايت لذاكرة التشارك لمنع انهيار متصفح Chromium
+    shm_size: '1gb'

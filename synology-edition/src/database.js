@@ -1,0 +1,641 @@
+/**
+ * Database - إدارة قاعدة بيانات SQLite
+ * 
+ * يوفّر singleton ودوال مساعدة للعمليات الشائعة
+ * بديل لـ src/Database.php
+ */
+
+const path = require('path');
+const fs = require('fs');
+const config = require('./config');
+
+let Database; // lazy-loaded better-sqlite3
+
+/** @type {import('better-sqlite3').Database} */
+let _instance = null;
+
+/**
+ * الحصول على instance واحد
+ */
+function getInstance(dbPath) {
+    if (_instance) return _instance;
+
+    if (!Database) {
+        Database = require('better-sqlite3');
+    }
+
+    dbPath = dbPath || config.DB_PATH;
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+
+    _instance = new Database(dbPath);
+
+    // تحسينات أداء SQLite
+    _instance.pragma('journal_mode = WAL');
+    _instance.pragma('synchronous = NORMAL');
+    _instance.pragma('foreign_keys = ON');
+
+    // تحديثات الهيكل البرمجي (Migration)
+    try {
+        _instance.exec("ALTER TABLE uploads ADD COLUMN message_id TEXT");
+    } catch (e) {}
+    try {
+        _instance.exec("ALTER TABLE queue ADD COLUMN message_id TEXT");
+    } catch (e) {}
+
+    // جدول المجموعات المحفوظة
+    try {
+        _instance.exec(`
+            CREATE TABLE IF NOT EXISTS groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                participant_count INTEGER DEFAULT 0,
+                last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_groups_last_active ON groups(last_active DESC);
+        `);
+    } catch (e) {}
+
+    return _instance;
+}
+
+/**
+ * تطبيق schema قاعدة البيانات
+ */
+function applySchema(schemaPath) {
+    const db = getInstance();
+    const sql = fs.readFileSync(schemaPath, 'utf8');
+    db.exec(sql);
+}
+
+// =============================================
+// 📤 Uploads
+// =============================================
+
+function logUpload(data) {
+    const db = getInstance();
+    const stmt = db.prepare(`
+        INSERT INTO uploads (work_order, file_name, file_hash, drive_id, drive_url, group_id, group_name, sender, caption, status, message_id)
+        VALUES (@work_order, @file_name, @file_hash, @drive_id, @drive_url, @group_id, @group_name, @sender, @caption, @status, @message_id)
+    `);
+    const result = stmt.run({
+        work_order: data.work_order,
+        file_name: data.file_name,
+        file_hash: data.file_hash || null,
+        drive_id: data.drive_id || null,
+        drive_url: data.drive_url || null,
+        group_id: data.group_id || null,
+        group_name: data.group_name || null,
+        sender: data.sender || null,
+        caption: data.caption || null,
+        status: data.status || 'completed',
+        message_id: data.message_id || null,
+    });
+    return result.lastInsertRowid;
+}
+
+function getUploads(limit = 50, offset = 0, woFilter = null, status = null) {
+    const db = getInstance();
+    let sql = 'SELECT * FROM uploads WHERE 1=1';
+    const params = [];
+
+    if (woFilter) {
+        sql += ' AND work_order LIKE ?';
+        params.push(`%${woFilter}%`);
+    }
+    if (status) {
+        sql += ' AND status = ?';
+        params.push(status);
+    }
+
+    sql += ' ORDER BY uploaded_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    return db.prepare(sql).all(...params);
+}
+
+function getUploadById(id) {
+    const db = getInstance();
+    return db.prepare('SELECT * FROM uploads WHERE id = ?').get(id) || null;
+}
+
+// =============================================
+// 📁 Folders
+// =============================================
+
+function getFolder(workOrder, subFolder = null) {
+    const db = getInstance();
+    const key = subFolder ? `${workOrder}_${subFolder}` : workOrder;
+    const row = db.prepare('SELECT drive_id FROM folders WHERE work_order = ?').get(key);
+    return row ? row.drive_id : null;
+}
+
+function saveFolder(workOrder, driveId, subFolder = null) {
+    const db = getInstance();
+    const key = subFolder ? `${workOrder}_${subFolder}` : workOrder;
+    db.prepare('INSERT OR REPLACE INTO folders (work_order, drive_id) VALUES (?, ?)').run(key, driveId);
+}
+
+// =============================================
+// 💬 Message Context
+// =============================================
+
+function saveContext(groupId, workOrder, sender = null, ttlSeconds = 300) {
+    const db = getInstance();
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString().replace('T', ' ').substring(0, 19);
+    db.prepare('INSERT INTO message_context (group_id, work_order, sender, expires_at) VALUES (?, ?, ?, ?)').run(groupId, workOrder, sender, expiresAt);
+}
+
+function getRecentContext(groupId, sender = null) {
+    const db = getInstance();
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    let row;
+    if (sender) {
+        row = db.prepare(`
+            SELECT work_order FROM message_context
+            WHERE group_id = ? AND sender = ? AND expires_at > ?
+            ORDER BY created_at DESC LIMIT 1
+        `).get(groupId, sender, now);
+    } else {
+        row = db.prepare(`
+            SELECT work_order FROM message_context
+            WHERE group_id = ? AND expires_at > ?
+            ORDER BY created_at DESC LIMIT 1
+        `).get(groupId, now);
+    }
+
+    return row ? row.work_order : null;
+}
+
+function cleanExpiredContexts() {
+    const db = getInstance();
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const result = db.prepare('DELETE FROM message_context WHERE expires_at < ?').run(now);
+    return result.changes;
+}
+
+// =============================================
+// 📋 Queue
+// =============================================
+
+function enqueue(data) {
+    const db = getInstance();
+    const timeout = config.AWAIT_TIMEOUT_SECONDS || 90;
+    const timeoutAt = new Date(Date.now() + timeout * 1000).toISOString().replace('T', ' ').substring(0, 19);
+
+    const stmt = db.prepare(`
+        INSERT INTO queue (image_path, file_hash, group_id, group_name, sender, caption, work_order, status, timeout_at, message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const result = stmt.run(
+        data.image_path,
+        data.file_hash || null,
+        data.group_id || null,
+        data.group_name || null,
+        data.sender || null,
+        data.caption || null,
+        data.work_order || null,
+        data.status || 'waiting',
+        timeoutAt,
+        data.message_id || null
+    );
+
+    return result.lastInsertRowid;
+}
+
+function getExpiredQueue() {
+    const db = getInstance();
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    return db.prepare('SELECT * FROM queue WHERE status = ? AND timeout_at <= ?').all('waiting', now);
+}
+
+function getWaitingImages(groupId, sender = null) {
+    const db = getInstance();
+    if (sender) {
+        return db.prepare('SELECT * FROM queue WHERE group_id = ? AND sender = ? AND status = ?').all(groupId, sender, 'waiting');
+    }
+    return db.prepare('SELECT * FROM queue WHERE group_id = ? AND status = ?').all(groupId, 'waiting');
+}
+
+function updateQueueStatus(id, status, workOrder = null) {
+    const db = getInstance();
+    if (workOrder !== null) {
+        db.prepare('UPDATE queue SET status = ?, work_order = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, workOrder, id);
+    } else {
+        db.prepare('UPDATE queue SET status = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
+    }
+}
+
+function incrementQueueAttempts(id) {
+    const db = getInstance();
+    db.prepare('UPDATE queue SET attempts = attempts + 1 WHERE id = ?').run(id);
+}
+
+function getProcessingQueue() {
+    const db = getInstance();
+    return db.prepare('SELECT * FROM queue WHERE status = ?').all('processing');
+}
+
+// =============================================
+// 🔑 Settings
+// =============================================
+
+function getSetting(key, defaultValue = null) {
+    const db = getInstance();
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return row ? row.value : defaultValue;
+}
+
+function setSetting(key, value) {
+    const db = getInstance();
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
+const saveSetting = setSetting;
+
+function getAllSettings() {
+    const db = getInstance();
+    const rows = db.prepare('SELECT key, value FROM settings').all();
+    const settings = {};
+    for (const row of rows) {
+        settings[row.key] = row.value;
+    }
+    return settings;
+}
+
+function cleanOldLogs(days = 30) {
+    const db = getInstance();
+    try {
+        const res = db.prepare(`
+            DELETE FROM activity_log 
+            WHERE created_at < datetime('now', '-' || ? || ' days')
+        `).run(days);
+        return res.changes;
+    } catch (e) {
+        console.error('Error cleaning old logs:', e.message);
+        return 0;
+    }
+}
+
+
+// =============================================
+// 📊 Statistics
+// =============================================
+
+function getStats() {
+    const db = getInstance();
+
+    const today = new Date().toISOString().substring(0, 10);
+
+    const totalUploads = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE status = 'completed'").get().c;
+    const todayUploads = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE status = 'completed' AND DATE(uploaded_at) = ?").get(today).c;
+    const uniqueWO = db.prepare("SELECT COUNT(DISTINCT work_order) as c FROM uploads WHERE work_order != 'UNSORTED' AND status = 'completed'").get().c;
+    const unsorted = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE work_order = 'UNSORTED' AND status = 'completed'").get().c;
+    const pending = db.prepare("SELECT COUNT(*) as c FROM queue WHERE status = 'waiting'").get().c;
+    const duplicates = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE status = 'duplicate'").get().c;
+    const failed = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE status = 'failed'").get().c;
+
+    // رفعات هذا الأسبوع
+    const now = new Date();
+    const dayOfWeek = now.getDay() || 7; // Sunday = 7
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - dayOfWeek + 1);
+    const weekStart = monday.toISOString().substring(0, 10);
+    const weekUploads = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE status = 'completed' AND DATE(uploaded_at) >= ?").get(weekStart).c;
+
+    return {
+        total_uploads: totalUploads,
+        today_uploads: todayUploads,
+        week_uploads: weekUploads,
+        unique_wo: uniqueWO,
+        unsorted,
+        pending,
+        duplicates,
+        failed,
+    };
+}
+
+// =============================================
+// 🔍 Duplicate Check
+// =============================================
+
+function isDuplicate(hash, workOrder = null) {
+    const db = getInstance();
+    if (workOrder) {
+        const row = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE file_hash = ? AND work_order = ? AND status = 'completed'").get(hash, workOrder);
+        return row.c > 0;
+    }
+    const row = db.prepare("SELECT COUNT(*) as c FROM uploads WHERE file_hash = ? AND status = 'completed'").get(hash);
+    return row.c > 0;
+}
+
+// =============================================
+// 🗑️ Reset & Move (for API routes)
+// =============================================
+
+function resetWorkOrder(workOrder) {
+    const db = getInstance();
+
+    const deletedUploads = db.prepare('DELETE FROM uploads WHERE work_order = ?').run(workOrder).changes;
+    const deletedFolders = db.prepare('DELETE FROM folders WHERE work_order = ?').run(workOrder).changes;
+    const deletedQueue = db.prepare('DELETE FROM queue WHERE work_order = ?').run(workOrder).changes;
+
+    return { deletedUploads, deletedFolders, deletedQueue };
+}
+
+function getUploadsForMove(fromWO, count) {
+    const db = getInstance();
+    return db.prepare(`
+        SELECT id, file_name, file_hash, drive_id, group_id, group_name, sender 
+        FROM uploads 
+        WHERE work_order = ? AND status = 'completed' 
+        ORDER BY id DESC 
+        LIMIT ?
+    `).all(fromWO, count);
+}
+
+function updateUploadWorkOrder(id, toWO, driveId = null) {
+    const db = getInstance();
+    if (driveId) {
+        db.prepare('UPDATE uploads SET work_order = ?, drive_id = ? WHERE id = ?').run(toWO, driveId, id);
+    } else {
+        db.prepare('UPDATE uploads SET work_order = ? WHERE id = ?').run(toWO, id);
+    }
+}
+
+function isMessageProcessed(messageId) {
+    if (!messageId) return false;
+    const db = getInstance();
+    try {
+        const row = db.prepare("SELECT 1 FROM processed_messages WHERE id = ?").get(messageId);
+        if (row) return true;
+        const rowUpload = db.prepare("SELECT 1 FROM uploads WHERE message_id = ?").get(messageId);
+        if (rowUpload) return true;
+        const rowQueue = db.prepare("SELECT 1 FROM queue WHERE message_id = ?").get(messageId);
+        if (rowQueue) return true;
+    } catch (e) {
+        try {
+            db.exec(`CREATE TABLE IF NOT EXISTS processed_messages (id TEXT PRIMARY KEY, group_id TEXT, processed_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
+        } catch (err) {}
+    }
+    return false;
+}
+
+function markMessageProcessed(messageId, groupId = null) {
+    if (!messageId) return;
+    const db = getInstance();
+    try {
+        db.prepare("INSERT OR IGNORE INTO processed_messages (id, group_id) VALUES (?, ?)").run(messageId, groupId);
+    } catch (e) {
+        try {
+            db.exec(`CREATE TABLE IF NOT EXISTS processed_messages (id TEXT PRIMARY KEY, group_id TEXT, processed_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
+            db.prepare("INSERT OR IGNORE INTO processed_messages (id, group_id) VALUES (?, ?)").run(messageId, groupId);
+        } catch (err) {}
+    }
+}
+
+// =============================================
+// 📧 Email Tracking & Deduplication
+// =============================================
+
+function isEmailProcessed(uid, messageId = null) {
+    if (!uid && !messageId) return false;
+    const db = getInstance();
+    try {
+        if (uid) {
+            const row = db.prepare('SELECT id FROM email_processed WHERE uid = ?').get(String(uid));
+            if (row) return true;
+        }
+        if (messageId) {
+            const row = db.prepare('SELECT id FROM email_processed WHERE message_id = ?').get(String(messageId));
+            if (row) return true;
+        }
+    } catch (e) {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS email_processed (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uid          TEXT UNIQUE,
+                    message_id   TEXT,
+                    work_order   TEXT,
+                    subject      TEXT,
+                    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+        } catch (err) {}
+    }
+    return false;
+}
+
+function markEmailProcessed(uid, messageId = null, workOrder = null, subject = null) {
+    const db = getInstance();
+    try {
+        db.prepare(`
+            INSERT OR REPLACE INTO email_processed (uid, message_id, work_order, subject, processed_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(String(uid || ''), String(messageId || ''), String(workOrder || ''), String(subject || ''));
+    } catch (e) {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS email_processed (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uid          TEXT UNIQUE,
+                    message_id   TEXT,
+                    work_order   TEXT,
+                    subject      TEXT,
+                    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+            db.prepare(`
+                INSERT OR REPLACE INTO email_processed (uid, message_id, work_order, subject, processed_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            `).run(String(uid || ''), String(messageId || ''), String(workOrder || ''), String(subject || ''));
+        } catch (err) {}
+    }
+}
+
+// =============================================
+// 👥 Groups Management
+// =============================================
+
+function saveGroup(id, name, participantCount = 0) {
+    if (!id || !name) return;
+    const db = getInstance();
+    db.prepare(`
+        INSERT INTO groups (id, name, participant_count, last_active)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            participant_count = CASE WHEN excluded.participant_count > 0 THEN excluded.participant_count ELSE groups.participant_count END,
+            last_active = CURRENT_TIMESTAMP
+    `).run(id, name, participantCount);
+}
+
+function getAllCachedGroups() {
+    const db = getInstance();
+    // 1. مزامنة المجموعات من جدول الرفعات التاريخي إذا كانت غير موجودة في جدول groups
+    syncGroupsFromUploads();
+
+    // 2. إرجاع كل المجموعات مرتبة حسب النشاط الأخير
+    return db.prepare(`
+        SELECT id, name, participant_count, last_active 
+        FROM groups 
+        ORDER BY last_active DESC, name ASC
+    `).all();
+}
+
+function syncGroupsFromUploads() {
+    const db = getInstance();
+    try {
+        const rows = db.prepare(`
+            SELECT DISTINCT group_id, group_name 
+            FROM uploads 
+            WHERE group_id IS NOT NULL 
+              AND group_name IS NOT NULL 
+              AND group_id LIKE '%@g.us'
+        `).all();
+
+        const insertStmt = db.prepare(`
+            INSERT OR IGNORE INTO groups (id, name, participant_count, last_active)
+            VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+        `);
+
+        for (const row of rows) {
+            if (row.group_id && row.group_name) {
+                insertStmt.run(row.group_id, row.group_name);
+            }
+        }
+    } catch (e) {
+        // تجاهل الأخطاء العابرة
+    }
+}
+
+// =============================================
+// 📄 Export
+// =============================================
+
+function getUploadsForExport(woFilter = null, status = null) {
+    const db = getInstance();
+    let sql = 'SELECT id, work_order, file_name, group_name, sender, caption, status, uploaded_at FROM uploads WHERE 1=1';
+    const params = [];
+
+    if (woFilter) {
+        sql += ' AND work_order LIKE ?';
+        params.push(`%${woFilter}%`);
+    }
+    if (status) {
+        sql += ' AND status = ?';
+        params.push(status);
+    }
+
+    sql += ' ORDER BY uploaded_at DESC LIMIT 5000';
+    return db.prepare(sql).all(...params);
+}
+
+// =============================================
+// 📁 Work Orders Explorer
+// =============================================
+
+function getWorkOrdersSummary(search = null, limit = 100, offset = 0) {
+    const db = getInstance();
+    let sql = `
+        SELECT 
+            work_order,
+            COUNT(*) AS file_count,
+            MAX(uploaded_at) AS last_activity,
+            MIN(uploaded_at) AS first_activity,
+            (SELECT id FROM uploads u2 WHERE u2.work_order = uploads.work_order AND u2.drive_id IS NOT NULL ORDER BY u2.id DESC LIMIT 1) AS preview_upload_id,
+            (SELECT file_name FROM uploads u3 WHERE u3.work_order = uploads.work_order AND u3.drive_id IS NOT NULL ORDER BY u3.id DESC LIMIT 1) AS preview_file_name
+        FROM uploads
+        WHERE work_order IS NOT NULL AND work_order != ''
+    `;
+    const params = [];
+
+    if (search) {
+        sql += ` AND work_order LIKE ?`;
+        params.push(`%${search}%`);
+    }
+
+    sql += ` GROUP BY work_order ORDER BY last_activity DESC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    return db.prepare(sql).all(...params);
+}
+
+function getFilesByWorkOrder(workOrder) {
+    const db = getInstance();
+    return db.prepare(`
+        SELECT id, work_order, file_name, file_hash, drive_id, drive_url, group_id, group_name, sender, caption, status, uploaded_at
+        FROM uploads
+        WHERE work_order = ?
+        ORDER BY uploaded_at DESC
+    `).all(workOrder);
+}
+
+function moveSelectedUploads(uploadIds, targetWorkOrder, newDriveIdsMap = {}) {
+    const db = getInstance();
+    if (!Array.isArray(uploadIds) || uploadIds.length === 0) return 0;
+
+    const updateStmt = db.prepare(`
+        UPDATE uploads 
+        SET work_order = ?, drive_id = COALESCE(?, drive_id)
+        WHERE id = ?
+    `);
+
+    const updateMany = db.transaction((ids) => {
+        let count = 0;
+        for (const id of ids) {
+            const newDriveId = newDriveIdsMap[id] || null;
+            const res = updateStmt.run(targetWorkOrder, newDriveId, id);
+            count += res.changes;
+        }
+        return count;
+    });
+
+    return updateMany(uploadIds);
+}
+
+function moveAllUploadsOfWorkOrder(fromWorkOrder, targetWorkOrder) {
+    const db = getInstance();
+    const res = db.prepare(`
+        UPDATE uploads 
+        SET work_order = ?
+        WHERE work_order = ?
+    `).run(targetWorkOrder, fromWorkOrder);
+    return res.changes;
+}
+
+module.exports = {
+    getInstance,
+    applySchema,
+    // Uploads
+    logUpload, getUploads, getUploadById, getUploadsForExport,
+    // Folders
+    getFolder, saveFolder,
+    // Context
+    saveContext, getRecentContext, cleanExpiredContexts,
+    // Queue
+    enqueue, getExpiredQueue, getWaitingImages, updateQueueStatus, incrementQueueAttempts, getProcessingQueue,
+    // Settings
+    getSetting, setSetting, saveSetting, getAllSettings,
+    // Maintenance
+    cleanOldLogs,
+    // Stats
+    getStats,
+    // Duplicate & Email
+    isDuplicate,
+    isMessageProcessed,
+    markMessageProcessed,
+    isEmailProcessed,
+    markEmailProcessed,
+    // Reset & Move
+    resetWorkOrder, getUploadsForMove, updateUploadWorkOrder,
+    // Groups
+    saveGroup, getAllCachedGroups, syncGroupsFromUploads,
+    // Work Orders Explorer
+    getWorkOrdersSummary, getFilesByWorkOrder, moveSelectedUploads, moveAllUploadsOfWorkOrder,
+};

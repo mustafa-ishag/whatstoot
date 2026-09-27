@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.wwebjs_auth
+storage/temp/*
+storage/logs/*
+database/bot.sqlite
+database/bot.sqlite-wal
+database/bot.sqlite-shm
+.git
+.env
+data

@@ -1,0 +1,25 @@
+{
+    "name": "whatstoot",
+    "version": "2.0.0",
+    "description": "WhatsApp bot for organizing work order images — Node.js edition",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node --watch server.js"
+    },
+    "dependencies": {
+        "archiver": "^7.0.1",
+        "better-sqlite3": "^11.8.1",
+        "dotenv": "^16.5.0",
+        "express": "^5.2.1",
+        "googleapis": "^146.0.0",
+        "imapflow": "^1.4.3",
+        "mailparser": "^3.9.12",
+        "nodemailer": "^10.0.10",
+        "pdf-lib": "^1.17.1",
+        "qrcode": "^1.5.4",
+        "qrcode-terminal": "^0.12.0",
+        "sharp": "^0.35.4",
+        "whatsapp-web.js": "github:wwebjs/whatsapp-web.js"
+    }
+}

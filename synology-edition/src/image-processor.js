@@ -1,0 +1,230 @@
+/**
+ * ImageProcessor - معالجة الصور والنصوص
+ * 
+ * دمج منطق api/process-image.php كوحدة Node.js
+ * يُستدعى مباشرة من البوت (بدون HTTP)
+ */
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const config = require('./config');
+const db = require('./database');
+const DuplicateChecker = require('./duplicate-checker');
+const MessageContext = require('./message-context');
+
+class ImageProcessor {
+    constructor(uploader, logger) {
+        this.uploader = uploader;
+        this.logger = logger;
+        this.checker = new DuplicateChecker();
+        this.context = new MessageContext();
+
+        // التأكد من وجود مجلد temp
+        if (!fs.existsSync(config.TEMP_PATH)) {
+            fs.mkdirSync(config.TEMP_PATH, { recursive: true });
+        }
+    }
+
+    /**
+     * معالجة رسالة نصية
+     * @returns {{ success: boolean, work_order?: string, queued_images_updated?: number, message: string }}
+     */
+    processText(input) {
+        const { body, group_id, sender } = input;
+
+        const workOrder = this.context.processTextMessage(body, group_id, sender);
+
+        const response = { success: true, type: 'text' };
+
+        if (workOrder) {
+            response.work_order = workOrder;
+            response.message = `تم التعرف على رقم أمر العمل: ${workOrder}`;
+
+            // فحص الطابور — هل هناك صور تنتظر من نفس المرسل؟
+            const processedIds = this.context.processWaitingImages(group_id, workOrder, sender);
+            if (processedIds.length > 0) {
+                response.queued_images_updated = processedIds.length;
+                this.logger.info(`Linked ${workOrder} to ${processedIds.length} waiting images from ${sender}`);
+            }
+        } else {
+            response.message = 'لم يتم العثور على رقم أمر عمل';
+        }
+
+        return response;
+    }
+
+    /**
+     * معالجة صورة
+     * @returns {Promise<{ success: boolean, action: string, work_order?: string, file_name?: string, message: string }>}
+     */
+    async processImage(input) {
+        const { image_base64, temp_path, file_hash, mimetype, caption, work_order: inputWO, group_id, group_name, sender, original_filename, message_id } = input;
+
+        if (!image_base64 && !temp_path) {
+            return { success: false, message: 'No media data' };
+        }
+
+        try {
+            const ext = this.uploader.getExtensionFromMime(mimetype || 'image/jpeg');
+            const isVideo = (mimetype || '').startsWith('video/');
+            const isPdf = mimetype === 'application/pdf';
+            const prefix = isPdf ? 'pdf' : (isVideo ? 'vid' : 'img');
+            const tempExt = isPdf ? 'pdf' : ext;
+
+            let tempPath = temp_path;
+            let hash = file_hash;
+
+            // 1. إذا لم يُحفظ مسبقاً، نحفظ في القرص المؤقت ونحسب البصمة
+            if (!tempPath && image_base64) {
+                const mediaData = Buffer.from(image_base64, 'base64');
+                const tempName = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${tempExt}`;
+                tempPath = path.join(config.TEMP_PATH, tempName);
+                fs.writeFileSync(tempPath, mediaData);
+                hash = this.checker.hashData(mediaData);
+            } else if (tempPath && !hash) {
+                hash = this.checker.hashFile(tempPath);
+            }
+
+            const tempName = path.basename(tempPath);
+            const mediaType = isPdf ? 'pdf' : (isVideo ? 'video' : 'image');
+            const mediaLabel = isPdf ? 'الملف' : (isVideo ? 'الفيديو' : 'الصورة');
+            this.logger.info(`Processing ${mediaType}: ${tempName}`);
+
+            // 3. تحديد رقم أمر العمل
+            let workOrder = inputWO || '';
+            if (!workOrder) {
+                workOrder = this.context.resolveWorkOrder(caption, group_id, sender);
+            } else {
+                // إذا تم إرساله من البوت، نحفظه في السياق
+                if (sender) {
+                    db.saveContext(group_id, workOrder, sender, 300);
+                }
+            }
+
+            if (workOrder) {
+                // معالجة أي صور معلّقة لهذا المرسل
+                const processedIds = this.context.processWaitingImages(group_id, workOrder, sender);
+                if (processedIds.length > 0) {
+                    this.logger.info(`Linked ${workOrder} to ${processedIds.length} waiting items from ${sender} via resolved work order`);
+                }
+            }
+
+            // فحص التكرار مع رقم أمر العمل
+            if (workOrder && this.checker.isDuplicate(hash, workOrder)) {
+                this._safeUnlink(tempPath);
+                db.logUpload({
+                    work_order: workOrder,
+                    file_name: tempName,
+                    file_hash: hash,
+                    group_id, group_name, sender, caption,
+                    status: 'duplicate',
+                    message_id,
+                });
+                this.logger.warning(`Duplicate ${mediaType} skipped for WO ${workOrder}`);
+
+                return {
+                    success: true,
+                    action: 'skipped',
+                    reason: 'duplicate',
+                    work_order: workOrder,
+                    message: `⚠️ ${mediaLabel} مكرر — تم تخطيه (أمر العمل: ${workOrder})`,
+                };
+            }
+
+            // 4. إذا لم يوجد رقم أمر عمل → إضافة للطابور
+            if (!workOrder) {
+                const queueId = db.enqueue({
+                    image_path: tempPath,
+                    file_hash: hash,
+                    group_id, group_name, sender, caption,
+                    message_id,
+                });
+
+                this.logger.info(`${mediaType} queued (ID: ${queueId}), waiting for work order number...`);
+
+                return {
+                    success: true,
+                    action: 'queued',
+                    queue_id: queueId,
+                    message: `⏳ تم استلام ${mediaLabel} — بانتظار رقم أمر العمل...`,
+                };
+            }
+
+            // 5. رفع إلى Storage (Synology/Drive)
+            // PDF يُرفع في مجلد فرعي 'documents'، الصور/الفيديو في مجلد المجموعة
+            const subFolder = isPdf ? 'documents' : (group_id ? group_name : sender);
+            const folderId = await this.uploader.getOrCreateFolder(workOrder, subFolder);
+
+            // PDF يحتفظ باسمه الأصلي، الصور/الفيديو يُبنى لهم اسم جديد
+            let fileName;
+            if (isPdf && original_filename) {
+                fileName = `WO${workOrder}_${original_filename}`;
+            } else {
+                fileName = this.uploader.buildFileName(workOrder, tempExt);
+            }
+
+            const result = await this.uploader.upload(tempPath, folderId, fileName);
+
+            // 6. تسجيل في قاعدة البيانات
+            const uploadId = db.logUpload({
+                work_order: workOrder,
+                file_name: fileName,
+                file_hash: hash,
+                drive_id: result.id,
+                drive_url: result.url,
+                group_id, group_name, sender, caption,
+                status: 'completed',
+                message_id,
+            });
+
+            // 7. حذف الملف المؤقت
+            this._safeUnlink(tempPath);
+
+            this.logger.info(`✅ Uploaded ${fileName} to Drive for WO ${workOrder}`);
+
+            return {
+                success: true,
+                action: 'uploaded',
+                work_order: workOrder,
+                file_name: fileName,
+                drive_id: result.id,
+                drive_url: result.url,
+                upload_id: uploadId,
+                media_type: mediaType,
+                message: `✅ تم رفع ${mediaLabel} بنجاح\n📁 أمر العمل: ${workOrder}\n📄 الملف: ${fileName}`,
+            };
+
+        } catch (e) {
+            this.logger.error(`Image processing error: ${e.message}`);
+
+            // حفظ الصورة في UNSORTED عند الخطأ
+            try {
+                const tempPath = path.join(config.TEMP_PATH, `img_${Date.now()}_error.jpg`);
+                if (fs.existsSync(tempPath)) {
+                    const folderId = await this.uploader.getOrCreateFolder('UNSORTED');
+                    const fileName = this.uploader.buildFileName('ERROR', 'jpg');
+                    await this.uploader.upload(tempPath, folderId, fileName);
+                    this._safeUnlink(tempPath);
+                }
+            } catch (e2) {
+                // تجاهل
+            }
+
+            return {
+                success: false,
+                message: 'خطأ في معالجة الصورة: ' + e.message,
+            };
+        }
+    }
+
+    _safeUnlink(filePath) {
+        try {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch (e) {
+            // تجاهل
+        }
+    }
+}
+
+module.exports = ImageProcessor;
